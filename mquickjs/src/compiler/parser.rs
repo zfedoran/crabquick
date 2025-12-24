@@ -3,9 +3,10 @@
 //! Recursive descent parser for JavaScript
 
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
 
 use super::lexer::{Lexer, Token, TokenKind, SourceLocation};
 use super::ast::*;
@@ -1337,20 +1338,6 @@ impl<'a> Parser<'a> {
         }
 
         Ok(args)
-    }
-}
-
-// Add helper method to Lexer for parser checkpoint/restore
-impl<'a> Lexer<'a> {
-    pub fn pc(&self) -> usize {
-        self.pos
-    }
-
-    pub fn set_pc(&mut self, pos: usize) {
-        self.pos = pos;
-        // Recalculate line/column (simplified - in production would track more state)
-        self.line = 1;
-        self.column = 1;
     }
 }
 

@@ -2,6 +2,7 @@
 //!
 //! Converts JavaScript source code into a stream of tokens.
 
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -600,7 +601,11 @@ impl<'a> Lexer<'a> {
                         Some('x') => {
                             self.consume();
                             let hex = self.read_hex_escape(2)?;
-                            result.push(hex as char);
+                            if let Some(ch) = char::from_u32(hex) {
+                                result.push(ch);
+                            } else {
+                                result.push('\0');
+                            }
                         }
                         Some('u') => {
                             self.consume();
@@ -913,6 +918,19 @@ impl<'a> Lexer<'a> {
         self.column = saved_column;
 
         token
+    }
+
+    /// Gets the current position for parser checkpointing
+    pub fn pc(&self) -> usize {
+        self.pos
+    }
+
+    /// Sets the position for parser restore (simplified implementation)
+    pub fn set_pc(&mut self, pos: usize) {
+        self.pos = pos;
+        // Recalculate line/column (simplified - in production would track more state)
+        self.line = 1;
+        self.column = 1;
     }
 }
 

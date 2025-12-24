@@ -656,7 +656,7 @@ impl CodeGenerator {
         match lit {
             Literal::Number(n) => {
                 // Try to emit as inline integer
-                if n.floor() == *n && *n >= -1.0 && *n <= 7.0 {
+                if libm::floor(*n) == *n && *n >= -1.0 && *n <= 7.0 {
                     let opcode = match *n as i32 {
                         -1 => Opcode::PushMinus1,
                         0 => Opcode::Push0,
@@ -670,11 +670,11 @@ impl CodeGenerator {
                         _ => unreachable!(),
                     };
                     self.emit_simple(opcode);
-                } else if n.floor() == *n && *n >= i8::MIN as f64 && *n <= i8::MAX as f64 {
+                } else if libm::floor(*n) == *n && *n >= i8::MIN as f64 && *n <= i8::MAX as f64 {
                     self.emit(Instruction::with_i8(Opcode::PushI8, *n as i8));
-                } else if n.floor() == *n && *n >= i16::MIN as f64 && *n <= i16::MAX as f64 {
+                } else if libm::floor(*n) == *n && *n >= i16::MIN as f64 && *n <= i16::MAX as f64 {
                     self.emit(Instruction::with_i16(Opcode::PushI16, *n as i16));
-                } else if n.floor() == *n && *n >= i32::MIN as f64 && *n <= i32::MAX as f64 {
+                } else if libm::floor(*n) == *n && *n >= i32::MIN as f64 && *n <= i32::MAX as f64 {
                     self.emit(Instruction::with_i32(Opcode::PushI32, *n as i32));
                 } else {
                     // Add to constant pool

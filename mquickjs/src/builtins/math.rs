@@ -17,119 +17,119 @@ pub const SQRT1_2: f64 = core::f64::consts::FRAC_1_SQRT_2;
 /// Math.abs() - Returns absolute value
 #[inline]
 pub fn abs(x: f64) -> f64 {
-    x.abs()
+    libm::fabs(x)
 }
 
 /// Math.floor() - Returns largest integer less than or equal to x
 #[inline]
 pub fn floor(x: f64) -> f64 {
-    x.floor()
+    libm::floor(x)
 }
 
 /// Math.ceil() - Returns smallest integer greater than or equal to x
 #[inline]
 pub fn ceil(x: f64) -> f64 {
-    x.ceil()
+    libm::ceil(x)
 }
 
 /// Math.round() - Returns value rounded to nearest integer
 #[inline]
 pub fn round(x: f64) -> f64 {
-    x.round()
+    libm::round(x)
 }
 
 /// Math.trunc() - Returns integer part of x
 #[inline]
 pub fn trunc(x: f64) -> f64 {
-    x.trunc()
+    libm::trunc(x)
 }
 
 /// Math.min() - Returns smallest of given numbers
 pub fn min(args: &[f64]) -> f64 {
-    args.iter().fold(f64::INFINITY, |a, &b| a.min(b))
+    args.iter().fold(f64::INFINITY, |a, &b| if a < b { a } else { b })
 }
 
 /// Math.max() - Returns largest of given numbers
 pub fn max(args: &[f64]) -> f64 {
-    args.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b))
+    args.iter().fold(f64::NEG_INFINITY, |a, &b| if a > b { a } else { b })
 }
 
 /// Math.pow() - Returns base raised to exponent power
 #[inline]
 pub fn pow(base: f64, exponent: f64) -> f64 {
-    base.powf(exponent)
+    libm::pow(base, exponent)
 }
 
 /// Math.sqrt() - Returns square root
 #[inline]
 pub fn sqrt(x: f64) -> f64 {
-    x.sqrt()
+    libm::sqrt(x)
 }
 
 /// Math.sin() - Returns sine
 #[inline]
 pub fn sin(x: f64) -> f64 {
-    x.sin()
+    libm::sin(x)
 }
 
 /// Math.cos() - Returns cosine
 #[inline]
 pub fn cos(x: f64) -> f64 {
-    x.cos()
+    libm::cos(x)
 }
 
 /// Math.tan() - Returns tangent
 #[inline]
 pub fn tan(x: f64) -> f64 {
-    x.tan()
+    libm::tan(x)
 }
 
 /// Math.asin() - Returns arcsine
 #[inline]
 pub fn asin(x: f64) -> f64 {
-    x.asin()
+    libm::asin(x)
 }
 
 /// Math.acos() - Returns arccosine
 #[inline]
 pub fn acos(x: f64) -> f64 {
-    x.acos()
+    libm::acos(x)
 }
 
 /// Math.atan() - Returns arctangent
 #[inline]
 pub fn atan(x: f64) -> f64 {
-    x.atan()
+    libm::atan(x)
 }
 
 /// Math.atan2() - Returns arctangent of quotient
 #[inline]
 pub fn atan2(y: f64, x: f64) -> f64 {
-    y.atan2(x)
+    libm::atan2(y, x)
 }
 
 /// Math.log() - Returns natural logarithm
 #[inline]
 pub fn log(x: f64) -> f64 {
-    x.ln()
+    libm::log(x)
 }
 
 /// Math.log10() - Returns base-10 logarithm
 #[inline]
 pub fn log10(x: f64) -> f64 {
-    x.log10()
+    libm::log10(x)
 }
 
 /// Math.log2() - Returns base-2 logarithm
 #[inline]
 pub fn log2(x: f64) -> f64 {
-    x.log2()
+    libm::log2(x)
 }
 
 /// Math.exp() - Returns e raised to the power of x
 #[inline]
 pub fn exp(x: f64) -> f64 {
-    x.exp()
+    libm::exp(x)
 }
 
 /// Math.random() - Returns pseudo-random number between 0 and 1

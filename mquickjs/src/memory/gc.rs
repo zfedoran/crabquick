@@ -36,7 +36,9 @@ impl GarbageCollector {
 
     /// Removes a root value
     pub fn remove_root(&mut self, value: JSValue) {
-        if let Some(pos) = self.roots.iter().position(|&v| v.0 == value.0) {
+        // Compare raw bits by converting to usize
+        let value_bits = value.as_raw();
+        if let Some(pos) = self.roots.iter().position(|&v| v.as_raw() == value_bits) {
             self.roots.swap_remove(pos);
         }
     }

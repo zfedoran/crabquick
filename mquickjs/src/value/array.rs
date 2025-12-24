@@ -192,6 +192,61 @@ impl JSValueArray {
         self.header.set_count(count - 1);
         Some(value)
     }
+
+    /// Removes and returns the first element from the array (shift operation)
+    ///
+    /// Returns None if the array is empty.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the array was properly allocated.
+    pub unsafe fn shift(&mut self) -> Option<JSValue> {
+        let count = self.header.count();
+        if count == 0 {
+            return None;
+        }
+
+        let slice = self.as_mut_slice();
+        let value = slice[0];
+
+        // Shift all elements down by one
+        for i in 1..count {
+            slice[i - 1] = slice[i];
+        }
+
+        self.header.set_count(count - 1);
+        Some(value)
+    }
+
+    /// Adds an element to the beginning of the array (unshift operation)
+    ///
+    /// Returns false if the array is full.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the array was properly allocated.
+    pub unsafe fn unshift(&mut self, value: JSValue) -> bool {
+        let count = self.header.count();
+        let capacity = self.header.capacity();
+
+        if count >= capacity {
+            return false;
+        }
+
+        let slice = self.as_mut_slice();
+
+        // Shift all elements up by one
+        for i in (0..count).rev() {
+            slice[i + 1] = slice[i];
+        }
+
+        // Insert new element at the beginning
+        let full_slice = self.as_full_mut_slice();
+        full_slice[0] = value;
+
+        self.header.set_count(count + 1);
+        true
+    }
 }
 
 /// Array of bytes

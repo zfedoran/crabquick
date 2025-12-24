@@ -424,11 +424,11 @@ impl Context {
             // Calculate and set hash mask
             let hash_mask = PropertyTableHeader::calculate_hash_mask(capacity);
             header.set_hash_mask(hash_mask);
+            let hash_table_size = header.hash_table_size() as usize;
 
             // Initialize hash table if needed
             if hash_mask != 0 {
                 let hash_table_ptr = table.hash_table_ptr_mut();
-                let hash_table_size = header.hash_table_size() as usize;
                 for i in 0..hash_table_size {
                     *hash_table_ptr.add(i) = u32::MAX; // Empty slot marker
                 }
@@ -605,14 +605,17 @@ impl Context {
             let new_prop = Property::new_data(key, value, flags);
             let prop_idx = count;
 
+            // Read hash table info before borrowing mutably
+            let has_hash_table = header.has_hash_table();
+            let hash_mask = if has_hash_table { header.hash_mask() } else { 0 };
+
             // Add to properties array
             let properties_ptr = props_table.properties_ptr_mut();
             *properties_ptr.add(prop_idx as usize) = new_prop;
 
             // Update hash table if present
-            if header.has_hash_table() {
+            if has_hash_table {
                 let hash = key.id();
-                let hash_mask = header.hash_mask();
                 let slot = (hash & hash_mask) as usize;
 
                 let hash_table_ptr = props_table.hash_table_ptr_mut();
@@ -626,7 +629,8 @@ impl Context {
                 *hash_table_ptr.add(slot) = prop_idx;
             }
 
-            // Update count
+            // Update count - need to get header again
+            let header = props_table.header_mut();
             header.set_count(count + 1);
         }
 

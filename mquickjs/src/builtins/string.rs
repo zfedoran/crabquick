@@ -6,7 +6,8 @@
 
 use crate::context::Context;
 use crate::value::JSValue;
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 
 /// String() constructor
@@ -18,7 +19,8 @@ pub fn string_constructor(ctx: &mut Context, value: Option<JSValue>) -> Result<J
         Some(val) => {
             // Convert value to string
             if let Some(s) = ctx.get_string(val) {
-                ctx.new_string(s).map_err(|_| JSValue::exception())
+                let owned = s.to_string();
+                ctx.new_string(&owned).map_err(|_| JSValue::exception())
             } else if let Some(n) = ctx.get_number(val) {
                 let s = alloc::format!("{}", n);
                 ctx.new_string(&s).map_err(|_| JSValue::exception())
@@ -104,7 +106,7 @@ pub fn last_index_of(ctx: &Context, str_val: JSValue, search: JSValue, from_inde
 
 /// String.prototype.slice() - Extracts a section of a string
 pub fn slice(ctx: &mut Context, str_val: JSValue, start: i32, end: Option<i32>) -> Result<JSValue, JSValue> {
-    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?;
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
     let len = s.len() as i32;
 
     let start_idx = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
@@ -124,7 +126,7 @@ pub fn slice(ctx: &mut Context, str_val: JSValue, start: i32, end: Option<i32>) 
 
 /// String.prototype.substring() - Returns substring between two indices
 pub fn substring(ctx: &mut Context, str_val: JSValue, start: i32, end: Option<i32>) -> Result<JSValue, JSValue> {
-    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?;
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
     let len = s.len() as i32;
 
     let start_idx = start.max(0).min(len) as usize;
@@ -142,7 +144,7 @@ pub fn substring(ctx: &mut Context, str_val: JSValue, start: i32, end: Option<i3
 
 /// String.prototype.substr() - Returns substring starting at index with length
 pub fn substr(ctx: &mut Context, str_val: JSValue, start: i32, length: Option<i32>) -> Result<JSValue, JSValue> {
-    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?;
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
     let len = s.len() as i32;
 
     let start_idx = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
@@ -155,21 +157,21 @@ pub fn substr(ctx: &mut Context, str_val: JSValue, start: i32, length: Option<i3
 
 /// String.prototype.toLowerCase() - Converts string to lowercase
 pub fn to_lower_case(ctx: &mut Context, str_val: JSValue) -> Result<JSValue, JSValue> {
-    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?;
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
     let lower = s.to_lowercase();
     ctx.new_string(&lower).map_err(|_| JSValue::exception())
 }
 
 /// String.prototype.toUpperCase() - Converts string to uppercase
 pub fn to_upper_case(ctx: &mut Context, str_val: JSValue) -> Result<JSValue, JSValue> {
-    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?;
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
     let upper = s.to_uppercase();
     ctx.new_string(&upper).map_err(|_| JSValue::exception())
 }
 
 /// String.prototype.trim() - Removes whitespace from both ends
 pub fn trim(ctx: &mut Context, str_val: JSValue) -> Result<JSValue, JSValue> {
-    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?;
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
     let trimmed = s.trim();
     ctx.new_string(trimmed).map_err(|_| JSValue::exception())
 }
@@ -178,32 +180,32 @@ pub fn trim(ctx: &mut Context, str_val: JSValue) -> Result<JSValue, JSValue> {
 ///
 /// Simplified implementation
 pub fn split(ctx: &mut Context, str_val: JSValue, separator: Option<JSValue>, limit: Option<i32>) -> Result<JSValue, JSValue> {
-    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?;
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
 
-    let parts: Vec<&str> = if let Some(sep) = separator {
+    let parts: Vec<String> = if let Some(sep) = separator {
         if let Some(sep_str) = ctx.get_string(sep) {
-            s.split(sep_str).collect()
+            s.split(sep_str.as_ref()).map(|p: &str| p.to_string()).collect()
         } else {
-            vec![s]
+            vec![s.clone()]
         }
     } else {
-        vec![s]
+        vec![s.clone()]
     };
 
     let limit = limit.unwrap_or(i32::MAX) as usize;
-    let parts: Vec<&str> = parts.into_iter().take(limit).collect();
+    let parts: Vec<String> = parts.into_iter().take(limit).collect();
 
     // Create array of strings
     let mut arr_elements = Vec::new();
     for part in parts {
-        let part_val = ctx.new_string(part).map_err(|_| JSValue::exception())?;
+        let part_val = ctx.new_string(&part).map_err(|_| JSValue::exception())?;
         arr_elements.push(part_val);
     }
 
     let arr_idx = ctx.alloc_value_array(arr_elements.len()).map_err(|_| JSValue::exception())?;
     if let Some(arr) = ctx.get_value_array_mut(arr_idx) {
         for elem in arr_elements {
-            arr.push(elem);
+            unsafe { arr.push(elem); }
         }
     }
 

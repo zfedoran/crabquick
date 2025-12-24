@@ -148,6 +148,14 @@ impl JSValue {
         }
     }
 
+    /// Returns the raw bits of this value
+    ///
+    /// Useful for comparing values by identity
+    #[inline]
+    pub const fn as_raw(self) -> usize {
+        self.0
+    }
+
     /// Returns true if this value is a heap pointer
     #[inline]
     pub const fn is_ptr(self) -> bool {

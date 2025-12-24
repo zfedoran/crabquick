@@ -19,7 +19,7 @@ pub fn array_constructor(ctx: &mut Context, elements: &[JSValue]) -> Result<JSVa
 
     if let Some(arr) = ctx.get_value_array_mut(arr_idx) {
         for elem in elements {
-            arr.push(*elem);
+            unsafe { arr.push(*elem); }
         }
     }
 
@@ -44,7 +44,7 @@ pub fn array_push(ctx: &mut Context, arr: JSValue, elements: &[JSValue]) -> Resu
     let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
 
     for elem in elements {
-        if !arr_ref.push(*elem) {
+        if !unsafe { arr_ref.push(*elem) } {
             // Array is full
             return Err(JSValue::exception());
         }
@@ -58,7 +58,7 @@ pub fn array_pop(ctx: &mut Context, arr: JSValue) -> Result<JSValue, JSValue> {
     let idx = arr.to_ptr().ok_or(JSValue::exception())?;
     let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
 
-    Ok(arr_ref.pop().unwrap_or(JSValue::undefined()))
+    Ok(unsafe { arr_ref.pop() }.unwrap_or(JSValue::undefined()))
 }
 
 /// Array.prototype.shift() - Removes and returns the first element
@@ -66,7 +66,7 @@ pub fn array_shift(ctx: &mut Context, arr: JSValue) -> Result<JSValue, JSValue> 
     let idx = arr.to_ptr().ok_or(JSValue::exception())?;
     let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
 
-    Ok(arr_ref.shift().unwrap_or(JSValue::undefined()))
+    Ok(unsafe { arr_ref.shift() }.unwrap_or(JSValue::undefined()))
 }
 
 /// Array.prototype.unshift() - Adds elements to the beginning of an array
@@ -78,7 +78,7 @@ pub fn array_unshift(ctx: &mut Context, arr: JSValue, elements: &[JSValue]) -> R
 
     // Insert elements in reverse order to maintain their order
     for elem in elements.iter().rev() {
-        if !arr_ref.unshift(*elem) {
+        if !unsafe { arr_ref.unshift(*elem) } {
             return Err(JSValue::exception());
         }
     }
@@ -96,7 +96,7 @@ pub fn array_index_of(ctx: &Context, arr: JSValue, search_element: JSValue, from
     let count = arr_ref.header().count() as i32;
     let start = from_index.unwrap_or(0).max(0);
 
-    let slice = arr_ref.as_slice();
+    let slice = unsafe { arr_ref.as_slice() };
     for i in start..count {
         if i < slice.len() as i32 && slice[i as usize] == search_element {
             return Ok(i);
@@ -113,14 +113,14 @@ pub fn array_includes(ctx: &Context, arr: JSValue, search_element: JSValue, from
 }
 
 /// Array.prototype.join() - Joins all elements into a string
-pub fn array_join(ctx: &Context, arr: JSValue, separator: Option<&str>) -> Result<JSValue, JSValue> {
+pub fn array_join(ctx: &mut Context, arr: JSValue, separator: Option<&str>) -> Result<JSValue, JSValue> {
     let idx = arr.to_ptr().ok_or(JSValue::exception())?;
     let arr_ref = ctx.get_value_array(idx).ok_or(JSValue::exception())?;
 
     let sep = separator.unwrap_or(",");
     let mut result = String::new();
 
-    let slice = arr_ref.as_slice();
+    let slice = unsafe { arr_ref.as_slice() };
     for (i, elem) in slice.iter().enumerate() {
         if i > 0 {
             result.push_str(sep);
@@ -156,7 +156,7 @@ pub fn array_slice(ctx: &mut Context, arr: JSValue, start: Option<i32>, end: Opt
         return array_constructor(ctx, &[]);
     }
 
-    let slice = arr_ref.as_slice();
+    let slice = unsafe { arr_ref.as_slice() };
     let elements: Vec<JSValue> = slice[start_idx as usize..end_idx as usize].to_vec();
 
     array_constructor(ctx, &elements)
@@ -169,7 +169,7 @@ pub fn array_concat(ctx: &mut Context, arr: JSValue, others: &[JSValue]) -> Resu
     // Add elements from original array
     if let Some(idx) = arr.to_ptr() {
         if let Some(arr_ref) = ctx.get_value_array(idx) {
-            elements.extend_from_slice(arr_ref.as_slice());
+            unsafe { elements.extend_from_slice(arr_ref.as_slice()); }
         }
     }
 
@@ -177,7 +177,7 @@ pub fn array_concat(ctx: &mut Context, arr: JSValue, others: &[JSValue]) -> Resu
     for other in others {
         if let Some(idx) = other.to_ptr() {
             if let Some(arr_ref) = ctx.get_value_array(idx) {
-                elements.extend_from_slice(arr_ref.as_slice());
+                unsafe { elements.extend_from_slice(arr_ref.as_slice()); }
             } else {
                 // Not an array, add as single element
                 elements.push(*other);

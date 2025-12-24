@@ -975,7 +975,7 @@ impl VM {
     fn op_pow(&self, ctx: &mut Context, a: JSValue, b: JSValue) -> Result<JSValue, JSValue> {
         let a_num = ctx.get_number(a).or_else(|| a.to_int().map(|i| i as f64)).unwrap_or(0.0);
         let b_num = ctx.get_number(b).or_else(|| b.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        ctx.new_number(a_num.powf(b_num)).map_err(|_| JSValue::undefined())
+        ctx.new_number(libm::pow(a_num, b_num)).map_err(|_| JSValue::undefined())
     }
 
     fn op_neg(&self, ctx: &mut Context, a: JSValue) -> Result<JSValue, JSValue> {

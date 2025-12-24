@@ -14,8 +14,8 @@ categories = ["embedded", "parser-implementations", "no-std"]
 workspace = true
 
 [dependencies]
-# Core library maintains zero dependencies for minimal footprint
-# All functionality implemented natively
+# Core library maintains minimal dependencies for no_std support
+libm = "0.2"
 
 [dev-dependencies]
 proptest.workspace = true

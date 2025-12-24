@@ -55,7 +55,7 @@ pub fn is_finite(ctx: &Context, value: JSValue) -> bool {
 /// Number.isInteger() - Determines whether value is an integer
 pub fn is_integer(ctx: &Context, value: JSValue) -> bool {
     if let Some(n) = ctx.get_number(value) {
-        n.is_finite() && n.fract() == 0.0
+        n.is_finite() && libm::fmod(n, 1.0) == 0.0
     } else {
         false
     }

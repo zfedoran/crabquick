@@ -50,7 +50,7 @@ impl JSFloat64 {
     /// in a 31-bit signed integer (JSValue can inline these).
     pub fn can_inline(value: f64) -> bool {
         // Check if it's a whole number
-        if value.fract() != 0.0 {
+        if libm::fmod(value, 1.0) != 0.0 {
             return false;
         }
 

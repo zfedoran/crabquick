@@ -16,7 +16,7 @@ pub mod handle;
 pub mod header;
 
 // Re-exports
-pub use allocator::Arena;
+pub use allocator::{Arena, HeapIndex};
 pub use gc::GarbageCollector;
 pub use handle::GcRoot;
 pub use header::{MemBlockHeader, MemTag};

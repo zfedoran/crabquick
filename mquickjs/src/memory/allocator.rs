@@ -12,7 +12,7 @@ use core::mem;
 /// HeapIndex represents an offset into the arena's memory.
 /// Indices remain stable across garbage collection (they get updated
 /// during compaction via a forwarding table).
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HeapIndex(pub u32);
 
 impl HeapIndex {

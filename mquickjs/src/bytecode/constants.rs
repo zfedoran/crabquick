@@ -60,9 +60,10 @@ impl ConstantPool {
     fn find(&self, value: JSValue) -> Option<u16> {
         // For simple equality comparison
         // Note: This uses bitwise equality which works for our tagged values
+        let value_bits = value.as_raw();
         self.constants
             .iter()
-            .position(|&v| v.0 == value.0)
+            .position(|&v| v.as_raw() == value_bits)
             .map(|pos| pos as u16)
     }
 

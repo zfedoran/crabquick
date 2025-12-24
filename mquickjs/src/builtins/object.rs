@@ -15,8 +15,12 @@ use alloc::string::String;
 /// Creates a new object or converts a value to an object
 pub fn object_constructor(ctx: &mut Context, value: Option<JSValue>) -> Result<JSValue, JSValue> {
     match value {
-        None | Some(val) if val.is_null() || val.is_undefined() => {
+        None => {
             // Create new empty object
+            ctx.new_object().map_err(|_| JSValue::exception())
+        }
+        Some(val) if val.is_null() || val.is_undefined() => {
+            // Create new empty object for null/undefined
             ctx.new_object().map_err(|_| JSValue::exception())
         }
         Some(val) => {
@@ -221,7 +225,7 @@ fn create_array_from_values(ctx: &mut Context, values: &[JSValue]) -> Result<JSV
 
     if let Some(arr) = ctx.get_value_array_mut(arr_idx) {
         for val in values {
-            arr.push(*val);
+            unsafe { arr.push(*val); }
         }
     }
 
