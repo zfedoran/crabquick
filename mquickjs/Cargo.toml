@@ -1,0 +1,26 @@
+[package]
+name = "mquickjs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A minimal JavaScript engine in Rust - core library"
+keywords = ["javascript", "js", "engine", "embedded", "minimal"]
+categories = ["embedded", "parser-implementations", "no-std"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Core library maintains zero dependencies for minimal footprint
+# All functionality implemented natively
+
+[dev-dependencies]
+proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "benchmarks"
+harness = false

@@ -1,0 +1,21 @@
+[package]
+name = "mqjs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Command-line REPL for MicroQuickJS"
+
+[[bin]]
+name = "mqjs"
+path = "src/main.rs"
+
+[dependencies]
+mquickjs = { path = "../mquickjs" }
+rustyline = { version = "13.0", optional = true }
+
+[features]
+default = ["repl"]
+repl = ["rustyline"]

@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+    "mquickjs",
+    "mquickjs-build",
+    "mqjs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["MicroQuickJS Rust Contributors"]
+license = "MIT"
+repository = "https://github.com/yourusername/rustmicroquickjs"
+homepage = "https://github.com/yourusername/rustmicroquickjs"
+
+[workspace.dependencies]
+# Shared dev dependencies
+proptest = "1.4"
+criterion = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[workspace.lints.clippy]
+# Deny common mistakes
+all = "warn"
+correctness = "deny"
+suspicious = "warn"
+complexity = "warn"
+perf = "warn"
+
+# Pedantic lints
+pedantic = "warn"
+# But allow some pedantic lints that are too noisy
+module_name_repetitions = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+
+# Restriction lints for safety
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+
+# Style preferences
+unwrap_used = "warn"
+expect_used = "warn"

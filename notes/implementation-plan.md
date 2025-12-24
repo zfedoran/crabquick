@@ -138,7 +138,6 @@ rustyline = "13.0"    # Readline support (optional feature)
 
 **Tasks:**
 - [ ] Create Cargo workspace
-- [ ] Set up CI/CD pipeline (GitHub Actions)
 - [ ] Configure rustfmt, clippy
 - [ ] Create basic test harness
 - [ ] Define public API surface in `lib.rs`
