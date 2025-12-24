@@ -4,6 +4,7 @@
 //! It manages memory, the runtime environment, and provides the API for evaluating
 //! JavaScript code.
 
+use crate::memory::{Arena, GarbageCollector, HeapIndex};
 use crate::value::JSValue;
 
 /// JavaScript execution context
@@ -20,13 +21,18 @@ use crate::value::JSValue;
 /// let result = ctx.eval("1 + 1", "script.js", 0)?;
 /// ```
 pub struct Context {
-    // TODO: Add fields:
-    // - arena: Arena (memory management)
-    // - global_object: JSValue
-    // - exception_value: JSValue
-    // - gc_roots: Vec<*mut JSValue>
+    /// Memory arena for heap allocations
+    arena: Arena,
+    /// Garbage collector state
+    gc: GarbageCollector,
+    /// Global object (null until initialized)
+    global_object: JSValue,
+    /// Current exception value (if any)
+    exception_value: JSValue,
+    // TODO: Add more fields:
     // - unique_strings: SortedArray<JSString>
-    _placeholder: u8,
+    // - class_array: Vec<JSClass>
+    // - interrupt_handler: Option<InterruptHandler>
 }
 
 impl Context {
@@ -41,11 +47,14 @@ impl Context {
     /// ```rust,ignore
     /// let ctx = Context::new(8192); // 8 KB heap
     /// ```
-    pub fn new(_memory_size: usize) -> Self {
-        // TODO: Initialize arena, global object, built-ins
+    pub fn new(memory_size: usize) -> Self {
         Context {
-            _placeholder: 0,
+            arena: Arena::new(memory_size),
+            gc: GarbageCollector::new(),
+            global_object: JSValue::null(),
+            exception_value: JSValue::undefined(),
         }
+        // TODO: Initialize global object and built-ins
     }
 
     /// Evaluates JavaScript source code
@@ -72,18 +81,151 @@ impl Context {
 
     /// Triggers garbage collection
     pub fn gc(&mut self) {
-        // TODO: Implement mark-and-compact GC
+        self.gc.collect(&mut self.arena);
     }
 
     /// Returns the current memory usage in bytes
+    #[inline]
     pub fn memory_usage(&self) -> usize {
-        // TODO: Return actual memory usage
-        0
+        self.arena.heap_usage()
+    }
+
+    /// Returns the total arena size in bytes
+    #[inline]
+    pub fn arena_size(&self) -> usize {
+        self.arena.size()
+    }
+
+    /// Returns the amount of free memory in bytes
+    #[inline]
+    pub fn free_memory(&self) -> usize {
+        self.arena.free_space()
+    }
+
+    /// Adds a GC root to protect a value from garbage collection
+    pub fn add_root(&mut self, value: JSValue) {
+        self.gc.add_root(value);
+    }
+
+    /// Removes a GC root
+    pub fn remove_root(&mut self, value: JSValue) {
+        self.gc.remove_root(value);
+    }
+
+    /// Allocates memory from the arena
+    ///
+    /// This is a low-level method for internal use.
+    ///
+    /// # Safety
+    ///
+    /// The caller must initialize the allocated memory properly.
+    pub(crate) unsafe fn alloc_raw(
+        &mut self,
+        size: usize,
+        mtag: crate::memory::MemTag,
+    ) -> Result<HeapIndex, crate::memory::allocator::OutOfMemory> {
+        self.arena.alloc(size, mtag)
+    }
+
+    /// Gets a reference to the arena (for internal use)
+    #[inline]
+    pub(crate) fn arena(&self) -> &Arena {
+        &self.arena
+    }
+
+    /// Gets a mutable reference to the arena (for internal use)
+    #[inline]
+    pub(crate) fn arena_mut(&mut self) -> &mut Arena {
+        &mut self.arena
     }
 }
 
 impl Drop for Context {
     fn drop(&mut self) {
-        // TODO: Clean up resources
+        // Arena and GC will be dropped automatically
+        // TODO: Call finalizers on remaining objects if needed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_context_new() {
+        let ctx = Context::new(1024);
+        assert_eq!(ctx.memory_usage(), 0);
+        assert_eq!(ctx.arena_size(), 1024);
+        assert_eq!(ctx.free_memory(), 1024);
+    }
+
+    #[test]
+    fn test_context_gc() {
+        let mut ctx = Context::new(2048);
+
+        // Allocate some memory
+        let idx1 = unsafe {
+            ctx.alloc_raw(64, crate::memory::MemTag::Object).unwrap()
+        };
+
+        let val1 = JSValue::from_ptr(idx1);
+        ctx.add_root(val1);
+
+        // Allocate more
+        let _idx2 = unsafe {
+            ctx.alloc_raw(128, crate::memory::MemTag::String).unwrap()
+        };
+
+        let usage_before_gc = ctx.memory_usage();
+        assert!(usage_before_gc > 0);
+
+        // Run GC
+        ctx.gc();
+
+        // Memory usage should still be > 0 because we have a root
+        let usage_after_gc = ctx.memory_usage();
+        assert!(usage_after_gc > 0);
+
+        // Clean up
+        ctx.remove_root(val1);
+    }
+
+    #[test]
+    fn test_context_roots() {
+        let mut ctx = Context::new(2048);
+
+        let idx = unsafe {
+            ctx.alloc_raw(64, crate::memory::MemTag::Object).unwrap()
+        };
+        let val = JSValue::from_ptr(idx);
+
+        // Add root
+        ctx.add_root(val);
+
+        // GC should preserve it
+        ctx.gc();
+
+        // Remove root
+        ctx.remove_root(val);
+    }
+
+    #[test]
+    fn test_context_memory_tracking() {
+        let mut ctx = Context::new(1024);
+
+        let initial_usage = ctx.memory_usage();
+        assert_eq!(initial_usage, 0);
+
+        // Allocate something
+        let _idx = unsafe {
+            ctx.alloc_raw(32, crate::memory::MemTag::String).unwrap()
+        };
+
+        let usage_after_alloc = ctx.memory_usage();
+        assert!(usage_after_alloc > 0);
+        assert!(usage_after_alloc < 1024);
+
+        let free_space = ctx.free_memory();
+        assert_eq!(usage_after_alloc + free_space, 1024);
     }
 }

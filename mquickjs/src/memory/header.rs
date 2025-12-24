@@ -34,22 +34,41 @@ pub enum MemTag {
 /// Packed into a u32:
 /// - Bits 0-2: Memory tag (MemTag)
 /// - Bit 3: GC mark bit
-/// - Bits 4-31: Reserved for future use
+/// - Bits 4-31: Reserved for future use (size, flags, etc.)
+///
+/// Note: The actual size of the allocation is stored separately
+/// in the allocator's metadata or can be tracked externally.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct MemBlockHeader {
     data: u32,
+    /// Size of the allocation in bytes (including header)
+    /// This is stored separately to avoid bit-packing complexity
+    size: u32,
 }
 
 impl MemBlockHeader {
     const MTAG_MASK: u32 = 0x7;
     const GC_MARK_BIT: u32 = 1 << 3;
 
-    /// Creates a new header with the specified memory tag
-    pub fn new(mtag: MemTag) -> Self {
+    /// Creates a new header with the specified memory tag and size
+    pub fn new(mtag: MemTag, size: usize) -> Self {
         MemBlockHeader {
             data: mtag as u32,
+            size: size as u32,
         }
+    }
+
+    /// Returns the size of the allocation (including header)
+    #[inline]
+    pub fn size(self) -> usize {
+        self.size as usize
+    }
+
+    /// Sets the size of the allocation
+    #[inline]
+    pub fn set_size(&mut self, size: usize) {
+        self.size = size as u32;
     }
 
     /// Returns the memory tag
@@ -94,13 +113,15 @@ mod tests {
 
     #[test]
     fn test_header_size() {
-        assert_eq!(core::mem::size_of::<MemBlockHeader>(), 4);
+        // Header is now 8 bytes (two u32 fields)
+        assert_eq!(core::mem::size_of::<MemBlockHeader>(), 8);
     }
 
     #[test]
     fn test_mtag() {
-        let mut header = MemBlockHeader::new(MemTag::String);
+        let mut header = MemBlockHeader::new(MemTag::String, 64);
         assert_eq!(header.mtag(), MemTag::String);
+        assert_eq!(header.size(), 64);
 
         header.set_mtag(MemTag::Object);
         assert_eq!(header.mtag(), MemTag::Object);
@@ -108,14 +129,25 @@ mod tests {
 
     #[test]
     fn test_gc_mark() {
-        let mut header = MemBlockHeader::new(MemTag::Object);
+        let mut header = MemBlockHeader::new(MemTag::Object, 128);
         assert!(!header.gc_mark());
 
         header.set_gc_mark(true);
         assert!(header.gc_mark());
         assert_eq!(header.mtag(), MemTag::Object); // mtag should be preserved
+        assert_eq!(header.size(), 128); // size should be preserved
 
         header.set_gc_mark(false);
         assert!(!header.gc_mark());
+    }
+
+    #[test]
+    fn test_size() {
+        let mut header = MemBlockHeader::new(MemTag::String, 256);
+        assert_eq!(header.size(), 256);
+
+        header.set_size(512);
+        assert_eq!(header.size(), 512);
+        assert_eq!(header.mtag(), MemTag::String); // mtag should be preserved
     }
 }

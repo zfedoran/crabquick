@@ -130,14 +130,38 @@ impl JSValue {
         }
     }
 
-    // TODO: Add methods for:
-    // - from_ptr(HeapIndex) -> JSValue
-    // - to_ptr() -> Option<HeapIndex>
-    // - is_ptr() -> bool
-    // - is_object() -> bool
-    // - is_string() -> bool
-    // - is_number() -> bool
-    // - etc.
+    /// Creates a JSValue from a heap pointer
+    #[inline]
+    pub const fn from_ptr(index: crate::memory::HeapIndex) -> Self {
+        JSValue((index.0 as usize) << 3 | Self::TAG_PTR)
+    }
+
+    /// Attempts to extract a heap pointer from this value
+    ///
+    /// Returns None if the value is not a pointer.
+    #[inline]
+    pub const fn to_ptr(self) -> Option<crate::memory::HeapIndex> {
+        if (self.0 & Self::TAG_MASK) == Self::TAG_PTR {
+            Some(crate::memory::HeapIndex((self.0 >> 3) as u32))
+        } else {
+            None
+        }
+    }
+
+    /// Returns true if this value is a heap pointer
+    #[inline]
+    pub const fn is_ptr(self) -> bool {
+        (self.0 & Self::TAG_MASK) == Self::TAG_PTR
+    }
+
+    /// Returns true if this value is an object
+    ///
+    /// Note: This checks if it's a pointer. More specific type checking
+    /// requires inspecting the object header.
+    #[inline]
+    pub const fn is_object(self) -> bool {
+        self.is_ptr()
+    }
 }
 
 // Implement common traits
@@ -181,5 +205,66 @@ mod tests {
     fn test_exception() {
         let ex = JSValue::exception();
         assert!(ex.is_exception());
+    }
+
+    #[test]
+    fn test_ptr_encoding() {
+        use crate::memory::HeapIndex;
+
+        let idx = HeapIndex::from_usize(0);
+        let val = JSValue::from_ptr(idx);
+
+        assert!(val.is_ptr());
+        assert!(val.is_object());
+        assert_eq!(val.to_ptr(), Some(idx));
+        assert!(!val.is_int());
+        assert!(!val.is_null());
+    }
+
+    #[test]
+    fn test_ptr_various_indices() {
+        use crate::memory::HeapIndex;
+
+        for offset in [0, 8, 16, 64, 128, 256, 1024, 4096] {
+            let idx = HeapIndex::from_usize(offset);
+            let val = JSValue::from_ptr(idx);
+
+            assert!(val.is_ptr());
+            assert_eq!(val.to_ptr(), Some(idx));
+            assert_eq!(val.to_ptr().unwrap().as_usize(), offset);
+        }
+    }
+
+    #[test]
+    fn test_value_type_distinction() {
+        use crate::memory::HeapIndex;
+
+        // Integer
+        let int_val = JSValue::from_int(42);
+        assert!(int_val.is_int());
+        assert!(!int_val.is_ptr());
+        assert!(!int_val.is_null());
+        assert!(!int_val.is_bool());
+
+        // Pointer
+        let ptr_val = JSValue::from_ptr(HeapIndex::from_usize(64));
+        assert!(!ptr_val.is_int());
+        assert!(ptr_val.is_ptr());
+        assert!(!ptr_val.is_null());
+        assert!(!ptr_val.is_bool());
+
+        // Null
+        let null_val = JSValue::null();
+        assert!(!null_val.is_int());
+        assert!(!null_val.is_ptr());
+        assert!(null_val.is_null());
+        assert!(!null_val.is_bool());
+
+        // Boolean
+        let bool_val = JSValue::bool(true);
+        assert!(!bool_val.is_int());
+        assert!(!bool_val.is_ptr());
+        assert!(!bool_val.is_null());
+        assert!(bool_val.is_bool());
     }
 }
