@@ -339,6 +339,299 @@ impl Context {
             Some(self.arena.get_mut(index))
         }
     }
+
+    // ========== Object Operations ==========
+
+    /// Creates a new plain JavaScript object
+    ///
+    /// Returns a JSValue wrapping a pointer to the object on the heap.
+    pub fn new_object(&mut self) -> Result<JSValue, crate::memory::allocator::OutOfMemory> {
+        self.new_object_with_proto(JSValue::null())
+    }
+
+    /// Creates a new JavaScript object with a specific prototype
+    pub fn new_object_with_proto(
+        &mut self,
+        proto: JSValue,
+    ) -> Result<JSValue, crate::memory::allocator::OutOfMemory> {
+        use crate::object::JSObject;
+
+        // Calculate size: MemBlockHeader + JSObject
+        let total_size = core::mem::size_of::<crate::memory::MemBlockHeader>()
+            + core::mem::size_of::<JSObject>();
+
+        // Allocate memory
+        let index = unsafe { self.alloc_raw(total_size, MemTag::Object)? };
+
+        // Initialize the object
+        unsafe {
+            let obj: &mut JSObject = self.arena.get_mut(index);
+            *obj = JSObject::new_plain(proto);
+        }
+
+        Ok(JSValue::from_ptr(index))
+    }
+
+    /// Gets a reference to an object
+    ///
+    /// Returns None if the value is not an object.
+    pub fn get_object(&self, val: JSValue) -> Option<&crate::object::JSObject> {
+        let index = val.to_ptr()?;
+
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::Object {
+                return None;
+            }
+            Some(self.arena.get(index))
+        }
+    }
+
+    /// Gets a mutable reference to an object
+    pub fn get_object_mut(&mut self, val: JSValue) -> Option<&mut crate::object::JSObject> {
+        let index = val.to_ptr()?;
+
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::Object {
+                return None;
+            }
+            Some(self.arena.get_mut(index))
+        }
+    }
+
+    /// Allocates a new property table with the specified capacity
+    ///
+    /// Returns the HeapIndex of the allocated property table.
+    pub fn alloc_property_table(
+        &mut self,
+        capacity: u32,
+    ) -> Result<HeapIndex, crate::memory::allocator::OutOfMemory> {
+        use crate::object::PropertyTableHeader;
+
+        let alloc_size = PropertyTableHeader::allocation_size(capacity);
+        let total_size = core::mem::size_of::<crate::memory::MemBlockHeader>() + alloc_size;
+
+        // Allocate memory
+        let index = unsafe { self.alloc_raw(total_size, MemTag::PropertyTable)? };
+
+        // Initialize the property table header
+        unsafe {
+            let table: &mut crate::object::PropertyTable = self.arena.get_mut(index);
+            let header = table.header_mut();
+            *header = PropertyTableHeader::new(capacity);
+
+            // Calculate and set hash mask
+            let hash_mask = PropertyTableHeader::calculate_hash_mask(capacity);
+            header.set_hash_mask(hash_mask);
+
+            // Initialize hash table if needed
+            if hash_mask != 0 {
+                let hash_table_ptr = table.hash_table_ptr_mut();
+                let hash_table_size = header.hash_table_size() as usize;
+                for i in 0..hash_table_size {
+                    *hash_table_ptr.add(i) = u32::MAX; // Empty slot marker
+                }
+            }
+        }
+
+        Ok(index)
+    }
+
+    /// Gets a reference to a property table
+    pub fn get_property_table(&self, index: HeapIndex) -> Option<&crate::object::PropertyTable> {
+        if index.is_null() {
+            return None;
+        }
+
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::PropertyTable {
+                return None;
+            }
+            Some(self.arena.get(index))
+        }
+    }
+
+    /// Gets a mutable reference to a property table
+    pub fn get_property_table_mut(&mut self, index: HeapIndex) -> Option<&mut crate::object::PropertyTable> {
+        if index.is_null() {
+            return None;
+        }
+
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::PropertyTable {
+                return None;
+            }
+            Some(self.arena.get_mut(index))
+        }
+    }
+
+    /// Looks up a property in an object's own properties (no prototype chain)
+    ///
+    /// Returns the property if found, None otherwise.
+    pub fn find_own_property(
+        &self,
+        obj_val: JSValue,
+        key: crate::value::JSAtom,
+    ) -> Option<&crate::object::Property> {
+        use crate::object::Property;
+
+        let obj = self.get_object(obj_val)?;
+        if !obj.has_properties() {
+            return None;
+        }
+
+        let props_table = self.get_property_table(obj.props_index())?;
+
+        unsafe {
+            let header = props_table.header();
+            let count = header.count();
+
+            if count == 0 {
+                return None;
+            }
+
+            // For small tables, use linear search
+            if !header.has_hash_table() {
+                let properties = props_table.properties();
+                for prop in properties {
+                    if prop.key() == key {
+                        return Some(prop);
+                    }
+                }
+                return None;
+            }
+
+            // For larger tables, use hash table
+            let hash = key.id(); // Use atom ID as hash
+            let hash_mask = header.hash_mask();
+            let slot = (hash & hash_mask) as usize;
+
+            let hash_table_ptr = props_table.hash_table_ptr();
+            let mut prop_idx = *hash_table_ptr.add(slot);
+
+            // Walk the hash chain
+            let properties_ptr = props_table.properties_ptr();
+            while prop_idx != u32::MAX {
+                let prop = &*properties_ptr.add(prop_idx as usize);
+                if prop.key() == key {
+                    return Some(prop);
+                }
+                prop_idx = prop.hash_next();
+            }
+
+            None
+        }
+    }
+
+    /// Looks up a property in an object (including prototype chain)
+    ///
+    /// Returns the property value if found.
+    pub fn get_property(
+        &self,
+        obj_val: JSValue,
+        key: crate::value::JSAtom,
+    ) -> Option<JSValue> {
+        let mut current = obj_val;
+        let max_depth = 100; // Prevent infinite loops in broken prototype chains
+
+        for _ in 0..max_depth {
+            // Look in own properties
+            if let Some(prop) = self.find_own_property(current, key) {
+                return Some(prop.value());
+            }
+
+            // Walk up prototype chain
+            let obj = self.get_object(current)?;
+            let proto = obj.prototype();
+
+            if proto.is_null() {
+                // Reached end of prototype chain
+                return None;
+            }
+
+            current = proto;
+        }
+
+        // Prototype chain too deep
+        None
+    }
+
+    /// Adds a property to an object
+    ///
+    /// This adds to own properties only (doesn't affect prototype chain).
+    /// If the object doesn't have a property table yet, one will be created.
+    pub fn add_property(
+        &mut self,
+        obj_val: JSValue,
+        key: crate::value::JSAtom,
+        value: JSValue,
+        flags: crate::object::PropertyFlags,
+    ) -> Result<(), crate::memory::allocator::OutOfMemory> {
+        use crate::object::Property;
+
+        // Get or create property table
+        let obj_index = obj_val.to_ptr().ok_or(crate::memory::allocator::OutOfMemory)?;
+
+        let props_index = {
+            let obj: &crate::object::JSObject = unsafe { self.arena.get(obj_index) };
+            if !obj.has_properties() {
+                // Create initial property table
+                let props_idx = self.alloc_property_table(4)?; // Start with small capacity
+                let obj_mut: &mut crate::object::JSObject = unsafe { self.arena.get_mut(obj_index) };
+                obj_mut.set_props_index(props_idx);
+                props_idx
+            } else {
+                obj.props_index()
+            }
+        };
+
+        // Add the property
+        let props_table = self.get_property_table_mut(props_index)
+            .ok_or(crate::memory::allocator::OutOfMemory)?;
+
+        unsafe {
+            let header = props_table.header_mut();
+            let count = header.count();
+            let capacity = header.capacity();
+
+            // Check if we need to resize (not implemented yet - just fail if full)
+            if count >= capacity {
+                return Err(crate::memory::allocator::OutOfMemory);
+            }
+
+            let new_prop = Property::new_data(key, value, flags);
+            let prop_idx = count;
+
+            // Add to properties array
+            let properties_ptr = props_table.properties_ptr_mut();
+            *properties_ptr.add(prop_idx as usize) = new_prop;
+
+            // Update hash table if present
+            if header.has_hash_table() {
+                let hash = key.id();
+                let hash_mask = header.hash_mask();
+                let slot = (hash & hash_mask) as usize;
+
+                let hash_table_ptr = props_table.hash_table_ptr_mut();
+                let first_in_slot = *hash_table_ptr.add(slot);
+
+                // Link this property into the hash chain
+                let prop_mut = &mut *properties_ptr.add(prop_idx as usize);
+                prop_mut.set_hash_next(first_in_slot);
+
+                // Update slot to point to new property
+                *hash_table_ptr.add(slot) = prop_idx;
+            }
+
+            // Update count
+            header.set_count(count + 1);
+        }
+
+        Ok(())
+    }
 }
 
 impl Drop for Context {
@@ -511,6 +804,154 @@ mod tests {
             assert_eq!(array.pop(), Some(JSValue::from_int(2)));
             assert_eq!(array.pop(), Some(JSValue::from_int(1)));
             assert_eq!(array.pop(), None);
+        }
+    }
+
+    #[test]
+    fn test_object_creation() {
+        let mut ctx = Context::new(2048);
+
+        let obj_val = ctx.new_object().unwrap();
+        assert!(obj_val.is_ptr());
+
+        let obj = ctx.get_object(obj_val).unwrap();
+        assert!(obj.is_plain_object());
+        assert!(!obj.has_properties());
+        assert!(obj.is_extensible());
+    }
+
+    #[test]
+    fn test_object_with_prototype() {
+        let mut ctx = Context::new(2048);
+
+        let proto = ctx.new_object().unwrap();
+        let obj_val = ctx.new_object_with_proto(proto).unwrap();
+
+        let obj = ctx.get_object(obj_val).unwrap();
+        assert_eq!(obj.prototype(), proto);
+    }
+
+    #[test]
+    fn test_property_table_allocation() {
+        let mut ctx = Context::new(4096);
+
+        // Allocate small property table (no hash table)
+        let idx1 = ctx.alloc_property_table(4).unwrap();
+        let table1 = ctx.get_property_table(idx1).unwrap();
+        unsafe {
+            let header = table1.header();
+            assert_eq!(header.capacity(), 4);
+            assert_eq!(header.count(), 0);
+            assert!(!header.has_hash_table());
+        }
+
+        // Allocate large property table (with hash table)
+        let idx2 = ctx.alloc_property_table(16).unwrap();
+        let table2 = ctx.get_property_table(idx2).unwrap();
+        unsafe {
+            let header = table2.header();
+            assert_eq!(header.capacity(), 16);
+            assert_eq!(header.count(), 0);
+            assert!(header.has_hash_table());
+            assert_eq!(header.hash_mask(), 15); // 16 - 1
+        }
+    }
+
+    #[test]
+    fn test_add_property() {
+        use crate::object::PropertyFlags;
+        use crate::value::JSAtom;
+
+        let mut ctx = Context::new(4096);
+
+        let obj_val = ctx.new_object().unwrap();
+        let key = JSAtom::from_id(1);
+        let value = JSValue::from_int(42);
+
+        // Add a property
+        ctx.add_property(obj_val, key, value, PropertyFlags::default())
+            .unwrap();
+
+        // Object should now have a property table
+        let obj = ctx.get_object(obj_val).unwrap();
+        assert!(obj.has_properties());
+
+        // Find the property
+        let prop = ctx.find_own_property(obj_val, key).unwrap();
+        assert_eq!(prop.value(), value);
+        assert!(prop.flags().is_writable());
+        assert!(prop.flags().is_enumerable());
+        assert!(prop.flags().is_configurable());
+    }
+
+    #[test]
+    fn test_property_lookup_chain() {
+        use crate::object::PropertyFlags;
+        use crate::value::JSAtom;
+
+        let mut ctx = Context::new(8192);
+
+        // Create prototype with a property
+        let proto = ctx.new_object().unwrap();
+        let key = JSAtom::from_id(1);
+        let proto_value = JSValue::from_int(100);
+        ctx.add_property(proto, key, proto_value, PropertyFlags::default())
+            .unwrap();
+
+        // Create object with prototype
+        let obj = ctx.new_object_with_proto(proto).unwrap();
+
+        // Should find property in prototype
+        let found_value = ctx.get_property(obj, key);
+        assert_eq!(found_value, Some(proto_value));
+    }
+
+    #[test]
+    fn test_property_shadowing() {
+        use crate::object::PropertyFlags;
+        use crate::value::JSAtom;
+
+        let mut ctx = Context::new(8192);
+
+        // Create prototype with a property
+        let proto = ctx.new_object().unwrap();
+        let key = JSAtom::from_id(1);
+        ctx.add_property(proto, key, JSValue::from_int(100), PropertyFlags::default())
+            .unwrap();
+
+        // Create object with same property
+        let obj = ctx.new_object_with_proto(proto).unwrap();
+        let obj_value = JSValue::from_int(200);
+        ctx.add_property(obj, key, obj_value, PropertyFlags::default())
+            .unwrap();
+
+        // Should find own property (shadows prototype)
+        let found_value = ctx.get_property(obj, key);
+        assert_eq!(found_value, Some(obj_value));
+    }
+
+    #[test]
+    fn test_multiple_properties() {
+        use crate::object::PropertyFlags;
+        use crate::value::JSAtom;
+
+        let mut ctx = Context::new(8192);
+
+        let obj = ctx.new_object().unwrap();
+
+        // Add multiple properties
+        for i in 0..10 {
+            let key = JSAtom::from_id(i);
+            let value = JSValue::from_int(i as i32 * 10);
+            ctx.add_property(obj, key, value, PropertyFlags::default())
+                .unwrap();
+        }
+
+        // Look up all properties
+        for i in 0..10 {
+            let key = JSAtom::from_id(i);
+            let value = ctx.get_property(obj, key);
+            assert_eq!(value, Some(JSValue::from_int(i as i32 * 10)));
         }
     }
 }

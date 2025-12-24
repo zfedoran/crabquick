@@ -120,34 +120,71 @@ impl GarbageCollector {
 
     /// Scans an object for references and marks them
     fn scan_object(&mut self, index: HeapIndex, arena: &mut Arena) {
+        use super::header::MemTag;
+
         // SAFETY: index is from mark_stack, which only contains valid indices
         unsafe {
             let header = arena.get_header(index);
-            let _mtag = header.mtag();
+            let mtag = header.mtag();
 
-            // TODO: Based on mtag, scan the object for JSValue fields
-            // and mark any pointers found.
-            //
-            // For now, we don't have concrete object types implemented yet,
-            // so this is a placeholder. When object/string/array types are
-            // added, we'll need to:
-            // - Cast the object to the appropriate type
-            // - Iterate through its JSValue fields
-            // - Call mark_value() on each field
-            //
-            // Example for a hypothetical object:
-            // match mtag {
-            //     MemTag::Object => {
-            //         let obj = arena.get::<JSObject>(index);
-            //         self.mark_value(obj.proto, arena);
-            //         self.mark_value(obj.props, arena);
-            //     }
-            //     MemTag::Array => {
-            //         let arr = arena.get::<JSArray>(index);
-            //         // Mark array elements...
-            //     }
-            //     _ => {}
-            // }
+            match mtag {
+                MemTag::Object => {
+                    // Scan JSObject fields
+                    let obj: &crate::object::JSObject = arena.get(index);
+
+                    // Mark prototype
+                    self.mark_value(obj.prototype(), arena);
+
+                    // Mark property table
+                    if obj.has_properties() {
+                        self.mark_object(obj.props_index(), arena);
+                    }
+
+                    // Mark class data
+                    if obj.has_class_data() {
+                        self.mark_object(obj.class_data_index(), arena);
+                    }
+                }
+                MemTag::PropertyTable => {
+                    // Scan property table and mark all property values
+                    let table: &crate::object::PropertyTable = arena.get(index);
+                    let properties = table.properties();
+
+                    for prop in properties {
+                        // Mark property value (or getter function)
+                        self.mark_value(prop.value(), arena);
+
+                        // Mark setter function if present
+                        if prop.flags().has_set() {
+                            self.mark_value(prop.setter(), arena);
+                        }
+                    }
+                }
+                MemTag::ValueArray => {
+                    // Scan value array and mark all elements
+                    let array: &crate::value::JSValueArray = arena.get(index);
+                    let values = array.as_slice();
+
+                    for &value in values {
+                        self.mark_value(value, arena);
+                    }
+                }
+                MemTag::String | MemTag::Float64 | MemTag::ByteArray => {
+                    // These are leaf objects with no references
+                }
+                MemTag::FunctionBytecode => {
+                    // TODO: Mark function bytecode references when implemented
+                }
+                MemTag::ClosureData => {
+                    // TODO: Mark closure variable references when implemented
+                }
+                MemTag::VarRef => {
+                    // TODO: Mark variable reference value when implemented
+                }
+                MemTag::CFunctionData => {
+                    // C functions don't have GC references
+                }
+            }
         }
     }
 
