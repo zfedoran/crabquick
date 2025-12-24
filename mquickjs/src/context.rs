@@ -632,6 +632,53 @@ impl Context {
 
         Ok(())
     }
+
+    // ========== VM Execution ==========
+
+    /// Executes bytecode and returns the result
+    ///
+    /// This is the main entry point for running JavaScript bytecode.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytecode_index` - HeapIndex pointing to a JSByteArray containing bytecode
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(JSValue)` - The result of execution
+    /// * `Err(JSValue)` - An exception value
+    pub fn execute_bytecode(&mut self, bytecode_index: HeapIndex) -> Result<JSValue, JSValue> {
+        use crate::vm::VM;
+
+        let mut vm = VM::new();
+        vm.execute(self, bytecode_index)
+    }
+
+    /// Calls a JavaScript function
+    ///
+    /// # Arguments
+    ///
+    /// * `func` - The function to call
+    /// * `this_val` - The 'this' value for the call
+    /// * `args` - The arguments to pass
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(JSValue)` - The return value
+    /// * `Err(JSValue)` - An exception value
+    pub fn call_function(
+        &mut self,
+        _func: JSValue,
+        _this_val: JSValue,
+        _args: &[JSValue],
+    ) -> Result<JSValue, JSValue> {
+        // TODO: Implement function calling
+        // This requires:
+        // 1. Extracting the function bytecode from func
+        // 2. Setting up a call frame with args
+        // 3. Executing the bytecode
+        Ok(JSValue::undefined())
+    }
 }
 
 impl Drop for Context {
