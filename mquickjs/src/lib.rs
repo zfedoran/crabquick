@@ -38,6 +38,7 @@ pub use value::JSValue;
 
 // Module declarations
 pub mod memory;
+pub mod value;
 pub mod object;
 pub mod bytecode;
 pub mod compiler;
@@ -48,7 +49,6 @@ pub mod util;
 
 // Core types
 mod context;
-mod value;
 
 // Re-exports for convenience
 pub mod prelude {
