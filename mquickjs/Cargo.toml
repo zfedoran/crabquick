@@ -21,6 +21,10 @@ workspace = true
 proptest.workspace = true
 criterion.workspace = true
 
+[[bin]]
+name = "mquickjs"
+path = "src/bin/mquickjs.rs"
+
 [[bench]]
 name = "benchmarks"
 harness = false

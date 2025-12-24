@@ -35,6 +35,7 @@ extern crate alloc;
 // Public API exports
 pub use context::Context;
 pub use value::JSValue;
+pub use engine::{Engine, MemoryStats};
 
 // Module declarations
 pub mod memory;
@@ -46,6 +47,7 @@ pub mod vm;
 pub mod builtins;
 pub mod runtime;
 pub mod util;
+pub mod engine;
 
 // Core types
 mod context;
@@ -55,4 +57,5 @@ pub mod prelude {
     //! Commonly used types and traits
     pub use crate::context::Context;
     pub use crate::value::JSValue;
+    pub use crate::engine::{Engine, MemoryStats};
 }
