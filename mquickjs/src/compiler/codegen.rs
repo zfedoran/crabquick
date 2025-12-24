@@ -206,7 +206,8 @@ impl CodeGenerator {
 
             Stmt::Block { stmts, .. } => {
                 // Create new scope
-                let old_scope = core::mem::replace(&mut self.scope, Scope::with_parent(self.scope.clone()));
+                let new_scope = Scope::with_parent(self.scope.clone());
+                let old_scope = core::mem::replace(&mut self.scope, new_scope);
 
                 for stmt in stmts {
                     self.gen_stmt(stmt)?;
@@ -316,7 +317,8 @@ impl CodeGenerator {
 
             Stmt::For { init, test, update, body, .. } => {
                 // Create new scope for loop variable
-                let old_scope = core::mem::replace(&mut self.scope, Scope::with_parent(self.scope.clone()));
+                let new_scope = Scope::with_parent(self.scope.clone());
+                let old_scope = core::mem::replace(&mut self.scope, new_scope);
 
                 // Compile init
                 if let Some(ref init) = init {

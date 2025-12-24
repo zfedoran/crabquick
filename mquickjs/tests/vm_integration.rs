@@ -22,7 +22,7 @@ fn execute_bytecode(ctx: &mut Context, instructions: &[Instruction]) -> Result<m
         let bc_array = ctx.get_byte_array_mut(bc_index).unwrap();
         let slice = bc_array.as_full_mut_slice();
         slice[..bytecode.len()].copy_from_slice(&bytecode);
-        bc_array.header_mut().set_count(bytecode.len() as u32);
+        bc_array.header_mut().set_count(bytecode.len());
     }
 
     // Execute

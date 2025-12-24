@@ -174,7 +174,8 @@ pub fn array_concat(ctx: &mut Context, arr: JSValue, others: &[JSValue]) -> Resu
     }
 
     // Add elements from other arrays
-    for other in others {
+    for other in others.iter() {
+        let other: &JSValue = other;
         if let Some(idx) = other.to_ptr() {
             if let Some(arr_ref) = ctx.get_value_array(idx) {
                 unsafe { elements.extend_from_slice(arr_ref.as_slice()); }
@@ -298,7 +299,7 @@ mod tests {
 
         let idx = arr.to_ptr().unwrap();
         let arr_ref = ctx.get_value_array(idx).unwrap();
-        let slice = arr_ref.as_slice();
+        let slice = unsafe { arr_ref.as_slice() };
         assert_eq!(slice[0].to_int(), Some(0));
     }
 
@@ -340,7 +341,7 @@ mod tests {
         let s2 = ctx.new_string("b").unwrap();
         let arr = array_constructor(&mut ctx, &[s1, s2]).unwrap();
 
-        let result = array_join(&ctx, arr, Some(",")).unwrap();
+        let result = array_join(&mut ctx, arr, Some(",")).unwrap();
         assert_eq!(ctx.get_string(result).unwrap(), "a,b");
     }
 
@@ -388,7 +389,7 @@ mod tests {
 
         let idx = arr.to_ptr().unwrap();
         let arr_ref = ctx.get_value_array(idx).unwrap();
-        let slice = arr_ref.as_slice();
+        let slice = unsafe { arr_ref.as_slice() };
         assert_eq!(slice[0].to_int(), Some(3));
         assert_eq!(slice[2].to_int(), Some(1));
     }

@@ -184,7 +184,7 @@ pub fn split(ctx: &mut Context, str_val: JSValue, separator: Option<JSValue>, li
 
     let parts: Vec<String> = if let Some(sep) = separator {
         if let Some(sep_str) = ctx.get_string(sep) {
-            s.split(sep_str.as_ref()).map(|p: &str| p.to_string()).collect()
+            s.split(sep_str).map(|p: &str| p.to_string()).collect()
         } else {
             vec![s.clone()]
         }

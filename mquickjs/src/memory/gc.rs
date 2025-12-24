@@ -38,7 +38,7 @@ impl GarbageCollector {
     pub fn remove_root(&mut self, value: JSValue) {
         // Compare raw bits by converting to usize
         let value_bits = value.as_raw();
-        if let Some(pos) = self.roots.iter().position(|&v| v.as_raw() == value_bits) {
+        if let Some(pos) = self.roots.iter().position(|v: &JSValue| v.as_raw() == value_bits) {
             self.roots.swap_remove(pos);
         }
     }
@@ -70,7 +70,9 @@ impl GarbageCollector {
     /// Marks all root objects
     fn mark_roots(&mut self, arena: &mut Arena) {
         // Mark all explicitly registered roots
-        for &root_value in &self.roots {
+        // Clone to avoid borrow conflict
+        let roots: Vec<JSValue> = self.roots.clone();
+        for root_value in roots {
             self.mark_value(root_value, arena);
         }
 
@@ -131,43 +133,49 @@ impl GarbageCollector {
 
             match mtag {
                 MemTag::Object => {
-                    // Scan JSObject fields
+                    // Scan JSObject fields - extract data first to avoid borrow conflicts
                     let obj: &crate::object::JSObject = arena.get(index);
+                    let prototype = obj.prototype();
+                    let has_props = obj.has_properties();
+                    let props_idx = if has_props { Some(obj.props_index()) } else { None };
+                    let has_class = obj.has_class_data();
+                    let class_idx = if has_class { Some(obj.class_data_index()) } else { None };
 
-                    // Mark prototype
-                    self.mark_value(obj.prototype(), arena);
-
-                    // Mark property table
-                    if obj.has_properties() {
-                        self.mark_object(obj.props_index(), arena);
+                    // Now mark the extracted values
+                    self.mark_value(prototype, arena);
+                    if let Some(idx) = props_idx {
+                        self.mark_object(idx, arena);
                     }
-
-                    // Mark class data
-                    if obj.has_class_data() {
-                        self.mark_object(obj.class_data_index(), arena);
+                    if let Some(idx) = class_idx {
+                        self.mark_object(idx, arena);
                     }
                 }
                 MemTag::PropertyTable => {
-                    // Scan property table and mark all property values
+                    // Scan property table - extract values first
                     let table: &crate::object::PropertyTable = arena.get(index);
                     let properties = table.properties();
+                    let values_to_mark: Vec<(JSValue, Option<JSValue>)> = properties.iter()
+                        .map(|prop| {
+                            let setter = if prop.flags().has_set() { Some(prop.setter()) } else { None };
+                            (prop.value(), setter)
+                        })
+                        .collect();
 
-                    for prop in properties {
-                        // Mark property value (or getter function)
-                        self.mark_value(prop.value(), arena);
-
-                        // Mark setter function if present
-                        if prop.flags().has_set() {
-                            self.mark_value(prop.setter(), arena);
+                    // Now mark the extracted values
+                    for (value, setter) in values_to_mark {
+                        self.mark_value(value, arena);
+                        if let Some(s) = setter {
+                            self.mark_value(s, arena);
                         }
                     }
                 }
                 MemTag::ValueArray => {
-                    // Scan value array and mark all elements
+                    // Scan value array - extract values first
                     let array: &crate::value::JSValueArray = arena.get(index);
-                    let values = array.as_slice();
+                    let values: Vec<JSValue> = array.as_slice().to_vec();
 
-                    for &value in values {
+                    // Now mark the extracted values
+                    for value in values {
                         self.mark_value(value, arena);
                     }
                 }
@@ -259,7 +267,7 @@ impl GarbageCollector {
     fn update_references(&mut self, arena: &mut Arena) {
         // Update root references
         for root_value in &mut self.roots {
-            if let Some(old_index) = root_value.to_ptr() {
+            if let Some(old_index) = (*root_value).to_ptr() {
                 if let Some(&new_offset) = self.forwarding_table.get(&old_index) {
                     *root_value = JSValue::from_ptr(HeapIndex::from_usize(new_offset));
                 }

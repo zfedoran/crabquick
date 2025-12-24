@@ -480,10 +480,10 @@ impl PropertyTable {
     /// The caller must ensure that `self` points to a valid PropertyTable.
     #[inline]
     pub unsafe fn properties_ptr_mut(&mut self) -> *mut Property {
-        let header = self.header();
+        let hash_table_size = self.header().hash_table_size() as usize;
         let ptr = self as *mut Self as *mut u8;
         let offset = core::mem::size_of::<PropertyTableHeader>()
-            + (header.hash_table_size() as usize * core::mem::size_of::<u32>());
+            + (hash_table_size * core::mem::size_of::<u32>());
         ptr.add(offset) as *mut Property
     }
 
@@ -506,9 +506,9 @@ impl PropertyTable {
     /// The caller must ensure that `self` points to a valid PropertyTable.
     #[inline]
     pub unsafe fn properties_mut(&mut self) -> &mut [Property] {
-        let header = self.header();
+        let count = self.header().count() as usize;
         let ptr = self.properties_ptr_mut();
-        core::slice::from_raw_parts_mut(ptr, header.count() as usize)
+        core::slice::from_raw_parts_mut(ptr, count)
     }
 }
 

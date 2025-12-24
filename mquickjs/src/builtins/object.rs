@@ -64,7 +64,8 @@ pub fn object_keys(ctx: &mut Context, obj: JSValue) -> Result<JSValue, JSValue> 
         let count = header.count() as usize;
         let properties = props_table.properties();
 
-        for prop in properties.iter().take(count) {
+        for i in 0..count {
+            let prop: &crate::object::Property = &properties[i];
             if prop.flags().is_enumerable() {
                 // For simplicity, store atom ID as integer
                 let key_id = prop.key().id();
@@ -99,7 +100,8 @@ pub fn object_values(ctx: &mut Context, obj: JSValue) -> Result<JSValue, JSValue
         let count = header.count() as usize;
         let properties = props_table.properties();
 
-        for prop in properties.iter().take(count) {
+        for i in 0..count {
+            let prop: &crate::object::Property = &properties[i];
             if prop.flags().is_enumerable() {
                 values.push(prop.value());
             }
@@ -131,7 +133,8 @@ pub fn object_entries(ctx: &mut Context, obj: JSValue) -> Result<JSValue, JSValu
         let count = header.count() as usize;
         let properties = props_table.properties();
 
-        for prop in properties.iter().take(count) {
+        for i in 0..count {
+            let prop: &crate::object::Property = &properties[i];
             if prop.flags().is_enumerable() {
                 // Create [key, value] pair (simplified: store as values)
                 entries.push(prop.value());
@@ -151,7 +154,8 @@ pub fn object_assign(ctx: &mut Context, target: JSValue, sources: &[JSValue]) ->
     }
 
     // Copy properties from each source
-    for source in sources {
+    for source in sources.iter() {
+        let source: &JSValue = source;
         if !source.is_object() {
             continue;
         }
@@ -162,20 +166,32 @@ pub fn object_assign(ctx: &mut Context, target: JSValue, sources: &[JSValue]) ->
         }
 
         let props_index = src_obj.props_index();
-        let props_table = ctx.get_property_table(props_index)
-            .ok_or(JSValue::exception())?;
 
-        unsafe {
-            let header = props_table.header();
-            let count = header.count() as usize;
-            let properties = props_table.properties();
+        // Extract property data first to avoid borrow conflict
+        let props_to_copy: Vec<(crate::value::JSAtom, JSValue)> = {
+            let props_table = ctx.get_property_table(props_index)
+                .ok_or(JSValue::exception())?;
 
-            for prop in properties.iter().take(count) {
-                if prop.flags().is_enumerable() {
-                    ctx.add_property(target, prop.key(), prop.value(), PropertyFlags::default())
-                        .map_err(|_| JSValue::exception())?;
+            unsafe {
+                let header = props_table.header();
+                let count = header.count() as usize;
+                let properties = props_table.properties();
+
+                let mut result = Vec::new();
+                for i in 0..count {
+                    let prop: &crate::object::Property = &properties[i];
+                    if prop.flags().is_enumerable() {
+                        result.push((prop.key(), prop.value()));
+                    }
                 }
+                result
             }
+        };
+
+        // Now apply the properties
+        for (key, value) in props_to_copy {
+            ctx.add_property(target, key, value, PropertyFlags::default())
+                .map_err(|_| JSValue::exception())?;
         }
     }
 

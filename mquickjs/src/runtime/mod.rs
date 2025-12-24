@@ -16,6 +16,7 @@ pub use init::init_runtime;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::Context;
 
     #[test]
     fn test_init_runtime() {

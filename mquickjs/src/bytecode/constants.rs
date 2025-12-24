@@ -63,7 +63,7 @@ impl ConstantPool {
         let value_bits = value.as_raw();
         self.constants
             .iter()
-            .position(|&v| v.as_raw() == value_bits)
+            .position(|v: &JSValue| v.as_raw() == value_bits)
             .map(|pos| pos as u16)
     }
 
@@ -185,8 +185,8 @@ mod tests {
 
         let undefined = JSValue::undefined();
         let null = JSValue::null();
-        let true_val = JSValue::from_bool(true);
-        let false_val = JSValue::from_bool(false);
+        let true_val = JSValue::bool(true);
+        let false_val = JSValue::bool(false);
 
         let idx1 = pool.add(undefined).unwrap();
         let idx2 = pool.add(null).unwrap();

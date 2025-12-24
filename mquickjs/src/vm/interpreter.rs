@@ -61,11 +61,14 @@ impl VM {
         ctx: &mut Context,
         bytecode_index: HeapIndex,
     ) -> VMResult {
-        // Get the bytecode array
-        let bytecode = ctx.get_byte_array(bytecode_index)
-            .ok_or_else(|| self.throw_error(ctx, "Invalid bytecode"))?;
+        // Get the bytecode array - check first without holding borrow during error
+        let bytecode_ptr: *const crate::value::JSByteArray = match ctx.get_byte_array(bytecode_index) {
+            Some(b) => b as *const _,
+            None => return Err(self.throw_error(ctx, "Invalid bytecode")),
+        };
 
-        let bytecode_slice = unsafe { bytecode.as_slice() };
+        // SAFETY: bytecode_ptr is valid as long as we don't modify the arena
+        let bytecode_slice = unsafe { (*bytecode_ptr).as_slice() };
 
         // Create a bytecode reader
         let mut reader = BytecodeReader::new(bytecode_slice);
@@ -78,8 +81,9 @@ impl VM {
             JSValue::undefined(),  // this
         );
 
-        self.call_stack.push(frame)
-            .map_err(|_| self.throw_error(ctx, "Call stack overflow"))?;
+        if self.call_stack.push(frame).is_err() {
+            return Err(self.throw_error(ctx, "Call stack overflow"));
+        }
 
         // Main execution loop
         let result = self.run_loop(ctx, &mut reader);
@@ -1107,7 +1111,7 @@ mod tests {
             let bc_array = ctx.get_byte_array_mut(bc_index).unwrap();
             let slice = bc_array.as_full_mut_slice();
             slice[..bytecode.len()].copy_from_slice(&bytecode);
-            bc_array.header_mut().set_count(bytecode.len() as u32);
+            bc_array.header_mut().set_count(bytecode.len());
         }
 
         let result = vm.execute(&mut ctx, bc_index).unwrap();
@@ -1134,7 +1138,7 @@ mod tests {
             let bc_array = ctx.get_byte_array_mut(bc_index).unwrap();
             let slice = bc_array.as_full_mut_slice();
             slice[..bytecode.len()].copy_from_slice(&bytecode);
-            bc_array.header_mut().set_count(bytecode.len() as u32);
+            bc_array.header_mut().set_count(bytecode.len());
         }
 
         let result = vm.execute(&mut ctx, bc_index).unwrap();
@@ -1163,7 +1167,7 @@ mod tests {
             let bc_array = ctx.get_byte_array_mut(bc_index).unwrap();
             let slice = bc_array.as_full_mut_slice();
             slice[..bytecode.len()].copy_from_slice(&bytecode);
-            bc_array.header_mut().set_count(bytecode.len() as u32);
+            bc_array.header_mut().set_count(bytecode.len());
         }
 
         let result = vm.execute(&mut ctx, bc_index).unwrap();

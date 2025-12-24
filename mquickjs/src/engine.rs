@@ -258,7 +258,7 @@ impl Engine {
             let array = self.context.get_byte_array_mut(index).unwrap();
             let slice = array.as_full_mut_slice();
             slice[..len].copy_from_slice(bytecode);
-            array.header_mut().set_count(len as u32);
+            array.header_mut().set_count(len);
         }
 
         Ok(index)
