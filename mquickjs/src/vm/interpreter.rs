@@ -1068,6 +1068,116 @@ impl VM {
                 }
             }
 
+            // ===== Function Calls =====
+            Call => {
+                if let Operand::U8(argc) = instruction.operand {
+                    let argc = argc as u16;
+                    // Stack layout: [func, arg1, arg2, ..., argN]
+                    // Pop arguments
+                    let mut args = alloc::vec::Vec::new();
+                    for _ in 0..argc {
+                        let arg = self.value_stack.pop()
+                            .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                        args.push(arg);
+                    }
+                    // Reverse args since we popped them in reverse order
+                    args.reverse();
+
+                    // Pop function
+                    let func = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Call the function
+                    let result = ctx.call_function(func, JSValue::undefined(), &args)?;
+
+                    // Push result
+                    self.value_stack.push(result)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for Call"))
+                }
+            }
+
+            CallMethod => {
+                if let Operand::U8(argc) = instruction.operand {
+                    let argc = argc as u16;
+                    // Stack layout: [obj, func, arg1, arg2, ..., argN]
+                    // Pop arguments
+                    let mut args = alloc::vec::Vec::new();
+                    for _ in 0..argc {
+                        let arg = self.value_stack.pop()
+                            .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                        args.push(arg);
+                    }
+                    // Reverse args since we popped them in reverse order
+                    args.reverse();
+
+                    // Pop function
+                    let func = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Pop object (this)
+                    let this = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Call the function with 'this'
+                    let result = ctx.call_function(func, this, &args)?;
+
+                    // Push result
+                    self.value_stack.push(result)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for CallMethod"))
+                }
+            }
+
+            // ===== Property Access =====
+            GetField => {
+                if let Operand::U16(atom_idx) = instruction.operand {
+                    // Pop object from stack
+                    let obj = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Get property atom
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
+
+                    // Get property value
+                    let value = ctx.get_property(obj, atom)
+                        .unwrap_or(JSValue::undefined());
+
+                    // Push result
+                    self.value_stack.push(value)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for GetField"))
+                }
+            }
+
+            GetField8 => {
+                if let Operand::Atom8(atom_idx) = instruction.operand {
+                    // Pop object from stack
+                    let obj = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Get property atom
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
+
+                    // Get property value
+                    let value = ctx.get_property(obj, atom)
+                        .unwrap_or(JSValue::undefined());
+
+                    // Push result
+                    self.value_stack.push(value)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for GetField8"))
+                }
+            }
+
             // ===== Unimplemented Opcodes =====
             // These are stubs that need full implementation
             _ => {

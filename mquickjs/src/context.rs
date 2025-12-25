@@ -715,16 +715,78 @@ impl Context {
     /// * `Err(JSValue)` - An exception value
     pub fn call_function(
         &mut self,
-        _func: JSValue,
-        _this_val: JSValue,
-        _args: &[JSValue],
+        func: JSValue,
+        this_val: JSValue,
+        args: &[JSValue],
     ) -> Result<JSValue, JSValue> {
-        // TODO: Implement function calling
+        // Check if it's a native function
+        let func_index = match func.to_ptr() {
+            Some(idx) => idx,
+            None => return Err(self.new_string("Not a function").unwrap_or(JSValue::undefined())),
+        };
+
+        unsafe {
+            let header = self.arena.get_header(func_index);
+            if header.mtag() == MemTag::CFunctionData {
+                // It's a native function - call it directly
+                let cfunc: &crate::object::function::JSCFunction = self.arena.get(func_index);
+                let func_ptr = cfunc.func_ptr();
+                return func_ptr(self, this_val, args);
+            }
+        }
+
+        // TODO: Implement bytecode function calling
         // This requires:
         // 1. Extracting the function bytecode from func
         // 2. Setting up a call frame with args
         // 3. Executing the bytecode
         Ok(JSValue::undefined())
+    }
+
+    /// Creates a new native function
+    ///
+    /// # Arguments
+    ///
+    /// * `func_ptr` - The native function pointer
+    /// * `length` - The argument count (for Function.length)
+    ///
+    /// # Returns
+    ///
+    /// A JSValue wrapping the native function
+    pub fn new_native_function(
+        &mut self,
+        func_ptr: crate::object::function::NativeFn,
+        length: u16,
+    ) -> Result<JSValue, crate::memory::allocator::OutOfMemory> {
+        use crate::object::function::JSCFunction;
+
+        // Calculate size: MemBlockHeader + JSCFunction
+        let total_size = core::mem::size_of::<crate::memory::MemBlockHeader>()
+            + core::mem::size_of::<JSCFunction>();
+
+        // Allocate memory
+        let index = unsafe { self.alloc_raw(total_size, MemTag::CFunctionData)? };
+
+        // Initialize the C function
+        unsafe {
+            let cfunc: &mut JSCFunction = self.arena.get_mut(index);
+            *cfunc = JSCFunction::new(func_ptr, length);
+        }
+
+        Ok(JSValue::from_ptr(index))
+    }
+
+    /// Gets a reference to a native function
+    pub fn get_native_function(&self, val: JSValue) -> Option<&crate::object::function::JSCFunction> {
+        let index = val.to_ptr()?;
+
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::CFunctionData {
+                return None;
+            }
+            Some(self.arena.get(index))
+        }
     }
 }
 
@@ -1175,6 +1237,29 @@ mod tests {
         ctx.remove_root(obj1);
         ctx.remove_root(obj2);
         ctx.remove_root(obj3);
+    }
+
+    #[test]
+    fn test_native_function_as_property() {
+        use crate::value::JSAtom;
+        use crate::object::PropertyFlags;
+
+        let mut ctx = Context::new(32768); // 32KB heap
+
+        // Create a native function and add it as a property
+        let test_fn = ctx.new_native_function(crate::builtins::native_functions::math_abs, 1).unwrap();
+        assert!(ctx.get_native_function(test_fn).is_some());
+
+        // Create a test object
+        let test_obj = ctx.new_object().unwrap();
+
+        // Add the function as a property
+        let test_atom = JSAtom::from_id(12345);
+        ctx.add_property(test_obj, test_atom, test_fn, PropertyFlags::default()).unwrap();
+
+        // Retrieve it and verify it's still a native function
+        let retrieved = ctx.get_property(test_obj, test_atom).unwrap();
+        assert!(ctx.get_native_function(retrieved).is_some());
     }
 
     #[test]

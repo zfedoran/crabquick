@@ -32,9 +32,9 @@ pub enum MemTag {
 /// Memory block header
 ///
 /// Packed into a u32:
-/// - Bits 0-2: Memory tag (MemTag)
-/// - Bit 3: GC mark bit
-/// - Bits 4-31: Reserved for future use (size, flags, etc.)
+/// - Bits 0-3: Memory tag (MemTag, values 0-15)
+/// - Bit 4: GC mark bit
+/// - Bits 5-31: Reserved for future use (size, flags, etc.)
 ///
 /// Note: The actual size of the allocation is stored separately
 /// in the allocator's metadata or can be tracked externally.
@@ -48,8 +48,8 @@ pub struct MemBlockHeader {
 }
 
 impl MemBlockHeader {
-    const MTAG_MASK: u32 = 0x7;
-    const GC_MARK_BIT: u32 = 1 << 3;
+    const MTAG_MASK: u32 = 0xF;  // 4 bits for mtag (0-15)
+    const GC_MARK_BIT: u32 = 1 << 4;  // Move GC mark bit to bit 4
 
     /// Creates a new header with the specified memory tag and size
     pub fn new(mtag: MemTag, size: usize) -> Self {

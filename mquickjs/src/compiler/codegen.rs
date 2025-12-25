@@ -676,17 +676,60 @@ impl CodeGenerator {
             }
 
             Expr::Call { callee, args, .. } => {
-                // Compile callee
-                self.gen_expr(callee)?;
+                // Check if it's a method call (callee is a member expression)
+                let is_method_call = matches!(**callee, Expr::Member { .. });
 
-                // Compile arguments
-                for arg in args {
-                    self.gen_expr(arg)?;
+                if is_method_call {
+                    // For method calls: Math.abs(-5)
+                    // We need to emit: obj, func, args... then CallMethod
+                    if let Expr::Member { object, property, computed, .. } = &**callee {
+                        // Emit object (for 'this' binding)
+                        self.gen_expr(object)?;
+
+                        // Duplicate object on stack for property access
+                        self.emit_simple(Opcode::Dup);
+
+                        // Get the method
+                        if *computed {
+                            self.gen_expr(property)?;
+                            self.emit_simple(Opcode::GetArrayEl);
+                        } else {
+                            // Static property access
+                            if let Expr::Identifier(name, _) = &**property {
+                                let atom_idx = self.get_or_create_atom(name);
+                                if atom_idx < 256 {
+                                    self.emit(Instruction::with_atom8(Opcode::GetField8, atom_idx as u8));
+                                } else {
+                                    self.emit(Instruction::with_u16(Opcode::GetField, atom_idx));
+                                }
+                            } else {
+                                self.emit_simple(Opcode::Undefined);
+                            }
+                        }
+
+                        // Compile arguments
+                        for arg in args {
+                            self.gen_expr(arg)?;
+                        }
+
+                        // Emit method call
+                        let argc = args.len() as u8;
+                        self.emit(Instruction::with_u8(Opcode::CallMethod, argc));
+                    }
+                } else {
+                    // Regular function call
+                    // Compile callee
+                    self.gen_expr(callee)?;
+
+                    // Compile arguments
+                    for arg in args {
+                        self.gen_expr(arg)?;
+                    }
+
+                    // Emit call
+                    let argc = args.len() as u8;
+                    self.emit(Instruction::with_u8(Opcode::Call, argc));
                 }
-
-                // Emit call
-                let argc = args.len() as u8;
-                self.emit(Instruction::with_u8(Opcode::Call, argc));
 
                 Ok(())
             }
@@ -700,8 +743,17 @@ impl CodeGenerator {
                     self.gen_expr(property)?;
                     self.emit_simple(Opcode::GetArrayEl);
                 } else {
-                    // Static property access - would need atom table
-                    self.emit_simple(Opcode::Undefined);
+                    // Static property access
+                    if let Expr::Identifier(name, _) = &**property {
+                        let atom_idx = self.get_or_create_atom(name);
+                        if atom_idx < 256 {
+                            self.emit(Instruction::with_atom8(Opcode::GetField8, atom_idx as u8));
+                        } else {
+                            self.emit(Instruction::with_u16(Opcode::GetField, atom_idx));
+                        }
+                    } else {
+                        self.emit_simple(Opcode::Undefined);
+                    }
                 }
 
                 Ok(())

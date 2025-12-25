@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_eval_global_assignment() {
-        let mut engine = Engine::new(16384); // 16KB heap
+        let mut engine = Engine::new(32768); // 16KB heap
         let result = engine.eval("x = 5; x");
         match result {
             Ok(val) => {
@@ -479,14 +479,14 @@ mod tests {
 
     #[test]
     fn test_eval_global_multiple() {
-        let mut engine = Engine::new(16384); // 16KB heap
+        let mut engine = Engine::new(32768); // 16KB heap
         let result = engine.eval("a = 10; b = 20; a + b").unwrap();
         assert_eq!(engine.context.get_number(result), Some(30.0));
     }
 
     #[test]
     fn test_eval_global_persistence() {
-        let mut engine = Engine::new(16384); // 16KB heap
+        let mut engine = Engine::new(32768); // 16KB heap
 
         // Set a global variable
         engine.eval("x = 42").unwrap();
@@ -503,10 +503,96 @@ mod tests {
 
     #[test]
     fn test_eval_global_expression_sequence() {
-        let mut engine = Engine::new(16384); // 16KB heap
+        let mut engine = Engine::new(32768); // 16KB heap
 
         // Test that global assignments work in expression sequences
         let result = engine.eval("y = 5; z = y * 2; z + 3").unwrap();
         assert_eq!(engine.context.get_number(result), Some(13.0));
+    }
+
+    #[test]
+    fn test_eval_math_abs() {
+        let mut engine = Engine::new(32768); // Need more memory for builtins
+        let result = engine.eval("Math.abs(-5)");
+        match result {
+            Ok(val) => assert_eq!(engine.context.get_number(val), Some(5.0)),
+            Err(err) => {
+                let err_str = engine.value_to_string(err);
+                panic!("eval failed: {}", err_str);
+            }
+        }
+    }
+
+    #[test]
+    fn test_eval_math_floor() {
+        let mut engine = Engine::new(32768);
+        let result = engine.eval("Math.floor(3.7)").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(3.0));
+    }
+
+    #[test]
+    fn test_eval_math_ceil() {
+        let mut engine = Engine::new(32768);
+        let result = engine.eval("Math.ceil(3.2)").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(4.0));
+    }
+
+    #[test]
+    fn test_eval_math_round() {
+        let mut engine = Engine::new(32768);
+        let result = engine.eval("Math.round(3.5)").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(4.0));
+    }
+
+    #[test]
+    fn test_eval_math_max() {
+        let mut engine = Engine::new(32768);
+        let result = engine.eval("Math.max(1, 5, 3)").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(5.0));
+    }
+
+    #[test]
+    fn test_eval_math_min() {
+        let mut engine = Engine::new(32768);
+        let result = engine.eval("Math.min(1, 5, 3)").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(1.0));
+    }
+
+    #[test]
+    fn test_eval_console_log() {
+        let mut engine = Engine::new(32768);
+        // console.log should return a function
+        let result = engine.eval("console.log").unwrap();
+        // Should be a function object (pointer)
+        assert!(result.is_ptr());
+    }
+
+    #[test]
+    fn test_eval_math_object() {
+        let mut engine = Engine::new(32768);
+        // Math should be an object
+        let result = engine.eval("Math").unwrap();
+        assert!(result.is_ptr());
+    }
+
+    #[test]
+    fn test_eval_math_abs_property() {
+        let mut engine = Engine::new(32768);
+        // Math.abs should be a function
+        let result = engine.eval("Math.abs").unwrap();
+        if result.is_undefined() {
+            panic!("Math.abs returned undefined");
+        }
+        println!("Math.abs result: {:?}", result);
+        println!("Is ptr: {}", result.is_ptr());
+
+        assert!(result.is_ptr(), "Math.abs should be a pointer, got: {:?}", result);
+
+        // Check if it's a native function
+        if let Some(cfunc) = engine.context.get_native_function(result) {
+            println!("Found native function with length: {}", cfunc.length());
+        } else {
+            panic!("Math.abs should be a native function but got None from get_native_function");
+        }
     }
 }

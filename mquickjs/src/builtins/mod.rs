@@ -9,6 +9,7 @@ pub mod function;
 pub mod math;
 pub mod console;
 pub mod error;
+pub mod native_functions;
 
 // Legacy modules (stubs for future implementation)
 pub mod json;

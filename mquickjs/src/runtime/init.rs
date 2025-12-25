@@ -207,6 +207,8 @@ fn install_function_constructor(ctx: &mut Context, global: JSValue) -> Result<()
 
 /// Install Math object
 fn install_math_object(ctx: &mut Context, global: JSValue) -> Result<(), JSValue> {
+    use crate::builtins::native_functions;
+
     // Create Math object
     let math = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;
@@ -232,8 +234,30 @@ fn install_math_object(ctx: &mut Context, global: JSValue) -> Result<(), JSValue
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, math, "SQRT2", sqrt2)?;
 
-    // TODO: Install Math methods (abs, floor, ceil, round, min, max, pow, sqrt, etc.)
-    // These would be native function objects
+    // Install Math methods as native functions
+    let abs_fn = ctx.new_native_function(native_functions::math_abs, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, math, "abs", abs_fn)?;
+
+    let floor_fn = ctx.new_native_function(native_functions::math_floor, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, math, "floor", floor_fn)?;
+
+    let ceil_fn = ctx.new_native_function(native_functions::math_ceil, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, math, "ceil", ceil_fn)?;
+
+    let round_fn = ctx.new_native_function(native_functions::math_round, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, math, "round", round_fn)?;
+
+    let min_fn = ctx.new_native_function(native_functions::math_min, 2)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, math, "min", min_fn)?;
+
+    let max_fn = ctx.new_native_function(native_functions::math_max, 2)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, math, "max", max_fn)?;
 
     // Set Math on global
     set_property(ctx, global, "Math", math)?;
@@ -273,12 +297,28 @@ fn install_error_constructors(ctx: &mut Context, global: JSValue) -> Result<(), 
 
 /// Install console object
 fn install_console_object(ctx: &mut Context, global: JSValue) -> Result<(), JSValue> {
+    use crate::builtins::native_functions;
+
     // Create console object
     let console = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;
 
-    // TODO: Install console methods (log, error, warn, info)
-    // These would be native function objects
+    // Install console methods as native functions
+    let log_fn = ctx.new_native_function(native_functions::console_log_native, 0)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, console, "log", log_fn)?;
+
+    let error_fn = ctx.new_native_function(native_functions::console_error_native, 0)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, console, "error", error_fn)?;
+
+    let warn_fn = ctx.new_native_function(native_functions::console_warn_native, 0)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, console, "warn", warn_fn)?;
+
+    let info_fn = ctx.new_native_function(native_functions::console_info_native, 0)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, console, "info", info_fn)?;
 
     // Set console on global
     set_property(ctx, global, "console", console)?;
@@ -316,7 +356,7 @@ fn set_property(ctx: &mut Context, obj: JSValue, key: &str, value: JSValue) -> R
 }
 
 /// Convert a string to an atom (simplified - just hash the string)
-fn string_to_atom(s: &str) -> JSAtom {
+pub fn string_to_atom(s: &str) -> JSAtom {
     // Simple hash function
     let mut hash: u32 = 5381;
     for byte in s.bytes() {
