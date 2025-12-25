@@ -346,4 +346,51 @@ mod tests {
         assert!(r2 >= 0.0 && r2 < 1.0);
         assert_ne!(r1, r2); // Should be different
     }
+
+    #[test]
+    fn test_eval_returns_expression_value() {
+        let mut engine = Engine::new(8192);
+
+        // Test simple arithmetic - should return 4, not undefined
+        let result = engine.eval("2 + 2").unwrap();
+        assert_eq!(result.to_int(), Some(4));
+
+        // Test more complex expression
+        let result = engine.eval("10 * 5 + 3").unwrap();
+        assert_eq!(result.to_int(), Some(53));
+
+        // Test boolean expression
+        let result = engine.eval("true").unwrap();
+        assert_eq!(result.to_bool(), Some(true));
+
+        // Test string result as string
+        let result = engine.eval_as_string("42").unwrap();
+        assert_eq!(result, "42");
+    }
+
+    #[test]
+    fn test_eval_multiple_statements() {
+        let mut engine = Engine::new(8192);
+
+        // When there are multiple statements, only the last expression should be returned
+        let result = engine.eval("1 + 1; 2 + 2").unwrap();
+        assert_eq!(result.to_int(), Some(4));
+
+        // Test with a declaration followed by expression
+        let result = engine.eval("var x = 10; x * 2").unwrap();
+        assert_eq!(result.to_int(), Some(20));
+    }
+
+    #[test]
+    fn test_eval_non_expression_returns_undefined() {
+        let mut engine = Engine::new(8192);
+
+        // Variable declarations should still return undefined
+        let result = engine.eval("var x = 5;").unwrap();
+        assert!(result.is_undefined());
+
+        // Empty program should return undefined
+        let result = engine.eval("").unwrap();
+        assert!(result.is_undefined());
+    }
 }

@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use alloc::format;
 
-use crate::bytecode::{BytecodeWriter, Instruction, Opcode};
+use crate::bytecode::{BytecodeWriter, Instruction, Opcode, ConstantPool};
 use crate::value::JSValue;
 use super::ast::*;
 use super::lexer::SourceLocation;
@@ -32,14 +32,6 @@ impl CodeGenError {
 
 /// Code generation result
 pub type CodeGenResult<T> = Result<T, CodeGenError>;
-
-/// Represents a constant value in the constant pool
-#[derive(Debug, Clone, PartialEq)]
-enum Constant {
-    Number(f64),
-    String(String),
-    // Could add function bytecode, etc.
-}
 
 /// Label for forward jumps
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +98,7 @@ struct LoopContext {
 /// Code generator
 pub struct CodeGenerator {
     writer: BytecodeWriter,
-    constants: Vec<Constant>,
+    constants: ConstantPool,
     labels: Vec<Option<usize>>, // Label ID -> bytecode offset
     scope: Scope,
     loop_stack: Vec<LoopContext>,
@@ -117,7 +109,7 @@ impl CodeGenerator {
     pub fn new() -> Self {
         CodeGenerator {
             writer: BytecodeWriter::new(),
-            constants: Vec::new(),
+            constants: ConstantPool::new(),
             labels: Vec::new(),
             scope: Scope::new(),
             loop_stack: Vec::new(),
@@ -126,13 +118,18 @@ impl CodeGenerator {
 
     /// Generates bytecode for a program
     pub fn generate(mut self, program: &Program) -> CodeGenResult<Vec<u8>> {
+        let len = program.body.len();
+
         // Generate code for all statements
-        for stmt in &program.body {
-            self.gen_stmt(stmt)?;
+        for (i, stmt) in program.body.iter().enumerate() {
+            let is_last = i == len - 1;
+            self.gen_stmt_with_context(stmt, is_last)?;
         }
 
-        // Implicit return undefined at end
-        self.emit_simple(Opcode::ReturnUndef);
+        // Implicit return undefined at end if program is empty
+        if len == 0 {
+            self.emit_simple(Opcode::ReturnUndef);
+        }
 
         Ok(self.writer.finish())
     }
@@ -193,6 +190,32 @@ impl CodeGenerator {
     /// Emits an instruction
     fn emit(&mut self, instruction: Instruction) {
         self.writer.emit(&instruction);
+    }
+
+    /// Generates bytecode for a statement with context about position
+    fn gen_stmt_with_context(&mut self, stmt: &Stmt, is_last: bool) -> CodeGenResult<()> {
+        match stmt {
+            Stmt::Expression { expr, .. } => {
+                self.gen_expr(expr)?;
+                if is_last {
+                    // Last expression in program - return its value
+                    self.emit_simple(Opcode::Return);
+                } else {
+                    // Not last - drop the result
+                    self.emit_simple(Opcode::Drop);
+                }
+                Ok(())
+            }
+            _ => {
+                // For non-expression statements, use normal gen_stmt
+                // and emit ReturnUndef after if it's the last statement
+                self.gen_stmt(stmt)?;
+                if is_last {
+                    self.emit_simple(Opcode::ReturnUndef);
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Generates bytecode for a statement
@@ -770,5 +793,55 @@ mod tests {
         let bytecode = gen.generate(&program).unwrap();
 
         assert!(!bytecode.is_empty());
+    }
+
+    #[test]
+    fn test_expression_statement_returns_value() {
+        // Test that the last expression in a program returns its value
+        let parser = Parser::new("2 + 2");
+        let program = parser.parse().unwrap();
+
+        let gen = CodeGenerator::new();
+        let bytecode = gen.generate(&program).unwrap();
+
+        // The bytecode should end with Return, not ReturnUndef
+        // Bytecode should be: Push2, Push2, Add, Return
+        assert!(!bytecode.is_empty());
+
+        // Check that Return opcode is present (opcode value 163)
+        assert!(bytecode.contains(&163), "Bytecode should contain Return opcode");
+        // Should NOT contain ReturnUndef
+        assert!(!bytecode.contains(&164), "Bytecode should NOT contain ReturnUndef for expression");
+    }
+
+    #[test]
+    fn test_multiple_expressions_last_one_returned() {
+        // Test that only the last expression is returned
+        let parser = Parser::new("1 + 1; 2 + 2");
+        let program = parser.parse().unwrap();
+
+        let gen = CodeGenerator::new();
+        let bytecode = gen.generate(&program).unwrap();
+
+        assert!(!bytecode.is_empty());
+
+        // Should contain Drop (for first expression) and Return (for last)
+        assert!(bytecode.contains(&163), "Should contain Return opcode");
+        assert!(bytecode.contains(&0), "Should contain Drop opcode");
+    }
+
+    #[test]
+    fn test_var_decl_returns_undefined() {
+        // Test that variable declarations still return undefined
+        let parser = Parser::new("var x = 5;");
+        let program = parser.parse().unwrap();
+
+        let gen = CodeGenerator::new();
+        let bytecode = gen.generate(&program).unwrap();
+
+        assert!(!bytecode.is_empty());
+
+        // Should end with ReturnUndef (opcode value 164)
+        assert!(bytecode.contains(&164), "Should contain ReturnUndef opcode");
     }
 }
