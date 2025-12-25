@@ -137,6 +137,18 @@ pub enum Opcode {
     SetLoc2 = 59,
     /// Set local 3 (fast path)
     SetLoc3 = 60,
+    /// Get global variable (8-bit atom index)
+    GetGlobal8 = 61,
+    /// Get global variable (16-bit atom index)
+    GetGlobal16 = 62,
+    /// Put global variable (8-bit atom index)
+    PutGlobal8 = 63,
+    /// Put global variable (16-bit atom index)
+    PutGlobal16 = 64,
+    /// Set global variable (returns value, 8-bit atom index)
+    SetGlobal8 = 65,
+    /// Set global variable (returns value, 16-bit atom index)
+    SetGlobal16 = 66,
 
     // ===== Property Access =====
     /// Get object field
@@ -475,6 +487,12 @@ impl Opcode {
             Opcode::SetLoc1 => "set_loc1",
             Opcode::SetLoc2 => "set_loc2",
             Opcode::SetLoc3 => "set_loc3",
+            Opcode::GetGlobal8 => "get_global8",
+            Opcode::GetGlobal16 => "get_global16",
+            Opcode::PutGlobal8 => "put_global8",
+            Opcode::PutGlobal16 => "put_global16",
+            Opcode::SetGlobal8 => "set_global8",
+            Opcode::SetGlobal16 => "set_global16",
 
             // Property access
             Opcode::GetField => "get_field",
@@ -654,6 +672,12 @@ impl Opcode {
             Opcode::CallConstructor | Opcode::Apply | Opcode::ApplyEval |
             Opcode::Array | Opcode::Object => U8,
 
+            // Atom8 operands (for global variable names)
+            Opcode::GetGlobal8 | Opcode::PutGlobal8 | Opcode::SetGlobal8 => Atom8,
+
+            // Atom16 operands (for global variable names)
+            Opcode::GetGlobal16 | Opcode::PutGlobal16 | Opcode::SetGlobal16 => Atom16,
+
             // I8 operands
             Opcode::PushI8 => I8,
 
@@ -718,7 +742,7 @@ impl Opcode {
         // SAFETY: We validate that the u8 value corresponds to a valid opcode
         // The repr(u8) ensures this is a valid representation
         match val {
-            0..=10 | 11..=32 | 40..=60 | 70..=85 | 90..=101 |
+            0..=10 | 11..=32 | 40..=66 | 70..=85 | 90..=101 |
             110..=119 | 130..=133 | 140..=146 | 160..=170 |
             180..=188 | 200..=229 | 240..=245 | 250..=255 => unsafe {
                 Some(core::mem::transmute(val))
@@ -774,9 +798,13 @@ mod tests {
         assert_eq!(Opcode::from_u8(163), Some(Opcode::Return));
         assert_eq!(Opcode::from_u8(255), Some(Opcode::Nop));
 
+        // Valid opcode values (new global opcodes)
+        assert_eq!(Opcode::from_u8(61), Some(Opcode::GetGlobal8));
+        assert_eq!(Opcode::from_u8(66), Some(Opcode::SetGlobal16));
+
         // Invalid opcode values should return None
         assert_eq!(Opcode::from_u8(33), None);
-        assert_eq!(Opcode::from_u8(61), None);
+        assert_eq!(Opcode::from_u8(67), None);
     }
 
     #[test]

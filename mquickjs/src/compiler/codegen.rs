@@ -99,9 +99,15 @@ struct LoopContext {
 pub struct CodeGenerator {
     writer: BytecodeWriter,
     constants: ConstantPool,
+    /// Track which constants are f64 (true) vs JSValue (false)
+    const_is_f64: Vec<bool>,
     labels: Vec<Option<usize>>, // Label ID -> bytecode offset
     scope: Scope,
     loop_stack: Vec<LoopContext>,
+    /// Atom table for identifier names (maps string to sequential index)
+    atom_table: BTreeMap<String, u16>,
+    /// Atom strings in order (index -> string)
+    atom_strings: Vec<String>,
 }
 
 impl CodeGenerator {
@@ -110,10 +116,30 @@ impl CodeGenerator {
         CodeGenerator {
             writer: BytecodeWriter::new(),
             constants: ConstantPool::new(),
+            const_is_f64: Vec::new(),
             labels: Vec::new(),
             scope: Scope::new(),
             loop_stack: Vec::new(),
+            atom_table: BTreeMap::new(),
+            next_atom_id: 1, // Start at 1, reserve 0 for special use
         }
+    }
+
+    /// Gets or creates an atom for an identifier name
+    /// Uses the same hash function as the runtime to ensure atom IDs match
+    fn get_or_create_atom(&mut self, name: &str) -> u32 {
+        if let Some(&atom_id) = self.atom_table.get(name) {
+            return atom_id;
+        }
+
+        // Use the same hash function as runtime/init.rs string_to_atom
+        let mut hash: u32 = 5381;
+        for byte in name.bytes() {
+            hash = hash.wrapping_mul(33).wrapping_add(byte as u32);
+        }
+
+        self.atom_table.insert(name.to_string(), hash);
+        hash
     }
 
     /// Generates bytecode for a program
@@ -131,7 +157,30 @@ impl CodeGenerator {
             self.emit_simple(Opcode::ReturnUndef);
         }
 
-        Ok(self.writer.finish())
+        // Serialize the constant pool and bytecode
+        // Format: [constant_count: u16][(type: u8, value: usize)...][ bytecode...]
+        // Type: 0 = f64 bits, 1 = JSValue
+        let mut result = Vec::new();
+
+        // Write constant count
+        let const_count = self.constants.len() as u16;
+        result.extend_from_slice(&const_count.to_le_bytes());
+
+        // Write constants with type tags
+        for i in 0..self.constants.len() {
+            if let Some(value) = self.constants.get(i as u16) {
+                let raw = value.as_raw();
+                let is_f64 = self.const_is_f64.get(i).copied().unwrap_or(false);
+
+                result.push(if is_f64 { 0u8 } else { 1u8 });
+                result.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+
+        // Append the bytecode
+        result.extend_from_slice(self.writer.as_slice());
+
+        Ok(result)
     }
 
     /// Creates a new label
@@ -164,23 +213,6 @@ impl CodeGenerator {
         Ok(())
     }
 
-    /// Adds a constant to the pool and returns its index
-    fn add_constant(&mut self, constant: Constant) -> CodeGenResult<u16> {
-        // Check if constant already exists
-        for (i, c) in self.constants.iter().enumerate() {
-            if c == &constant {
-                return Ok(i as u16);
-            }
-        }
-
-        let index = self.constants.len();
-        if index > 0xFFFF {
-            return Err(CodeGenError::new("Too many constants".to_string()));
-        }
-
-        self.constants.push(constant);
-        Ok(index as u16)
-    }
 
     /// Emits a simple instruction (no operands)
     fn emit_simple(&mut self, opcode: Opcode) {
@@ -460,8 +492,13 @@ impl CodeGenerator {
                 if let Some((index, _)) = self.scope.find_binding(name) {
                     self.emit(Instruction::with_u8(Opcode::GetLoc, index));
                 } else {
-                    // Global variable - for now, push undefined
-                    self.emit_simple(Opcode::Undefined);
+                    // Global variable - emit GetGlobal
+                    let atom_id = self.get_or_create_atom(name);
+                    if atom_id <= 255 {
+                        self.emit(Instruction::with_atom8(Opcode::GetGlobal8, atom_id as u8));
+                    } else {
+                        self.emit(Instruction::with_atom16(Opcode::GetGlobal16, atom_id as u16));
+                    }
                 }
                 Ok(())
             }
@@ -552,6 +589,7 @@ impl CodeGenerator {
                 match left.as_ref() {
                     Expr::Identifier(name, _) => {
                         if let Some((index, _)) = self.scope.find_binding(name) {
+                            // Local variable
                             let opcode = if matches!(op, AssignOp::Assign) {
                                 Opcode::SetLoc
                             } else {
@@ -559,6 +597,30 @@ impl CodeGenerator {
                                 Opcode::PutLoc
                             };
                             self.emit(Instruction::with_u8(opcode, index));
+                        } else {
+                            // Global variable
+                            let atom_id = self.get_or_create_atom(name);
+                            let opcode = if matches!(op, AssignOp::Assign) {
+                                // Use SetGlobal to return the value
+                                if atom_id <= 255 {
+                                    Opcode::SetGlobal8
+                                } else {
+                                    Opcode::SetGlobal16
+                                }
+                            } else {
+                                // Compound assignment - use PutGlobal (doesn't return value)
+                                if atom_id <= 255 {
+                                    Opcode::PutGlobal8
+                                } else {
+                                    Opcode::PutGlobal16
+                                }
+                            };
+
+                            if atom_id <= 255 {
+                                self.emit(Instruction::with_atom8(opcode, atom_id as u8));
+                            } else {
+                                self.emit(Instruction::with_atom16(opcode, atom_id as u16));
+                            }
                         }
                     }
                     _ => {
@@ -702,12 +764,34 @@ impl CodeGenerator {
                 } else if libm::floor(*n) == *n && *n >= i32::MIN as f64 && *n <= i32::MAX as f64 {
                     self.emit(Instruction::with_i32(Opcode::PushI32, *n as i32));
                 } else {
-                    // Add to constant pool
-                    let index = self.add_constant(Constant::Number(*n))?;
-                    if index <= 255 {
-                        self.emit(Instruction::with_const8(Opcode::PushConst8, index as u8));
-                    } else {
-                        self.emit(Instruction::with_const16(Opcode::PushConst16, index));
+                    // Add to constant pool - store raw f64 bits as JSValue
+                    // We encode f64 as its bit representation in usize
+                    // The VM will need to convert this back to an f64
+                    #[cfg(target_pointer_width = "64")]
+                    {
+                        let bits = n.to_bits();
+                        let value = unsafe { core::mem::transmute::<usize, JSValue>(bits as usize) };
+                        let index = self.constants.add(value)
+                            .ok_or_else(|| CodeGenError::new("Too many constants".to_string()))?;
+                        // Mark this constant as f64
+                        self.const_is_f64.push(true);
+                        if index <= 255 {
+                            self.emit(Instruction::with_const8(Opcode::PushConst8, index as u8));
+                        } else {
+                            self.emit(Instruction::with_const16(Opcode::PushConst16, index));
+                        }
+                    }
+                    #[cfg(not(target_pointer_width = "64"))]
+                    {
+                        let value = JSValue::from_int(*n as i32); // Fallback for 32-bit
+                        let index = self.constants.add(value)
+                            .ok_or_else(|| CodeGenError::new("Too many constants".to_string()))?;
+                        self.const_is_f64.push(false);
+                        if index <= 255 {
+                            self.emit(Instruction::with_const8(Opcode::PushConst8, index as u8));
+                        } else {
+                            self.emit(Instruction::with_const16(Opcode::PushConst16, index));
+                        }
                     }
                 }
             }
@@ -716,12 +800,10 @@ impl CodeGenerator {
                 if s.is_empty() {
                     self.emit_simple(Opcode::PushEmptyString);
                 } else {
-                    let index = self.add_constant(Constant::String(s.clone()))?;
-                    if index <= 255 {
-                        self.emit(Instruction::with_const8(Opcode::PushConst8, index as u8));
-                    } else {
-                        self.emit(Instruction::with_const16(Opcode::PushConst16, index));
-                    }
+                    // For strings, we'll emit PushEmptyString for now
+                    // Full string support requires runtime string table
+                    // TODO: Implement proper string constant handling
+                    self.emit_simple(Opcode::PushEmptyString);
                 }
             }
 
@@ -812,6 +894,25 @@ mod tests {
         assert!(bytecode.contains(&163), "Bytecode should contain Return opcode");
         // Should NOT contain ReturnUndef
         assert!(!bytecode.contains(&164), "Bytecode should NOT contain ReturnUndef for expression");
+    }
+
+    #[test]
+    fn test_float_constant_pool() {
+        // Test that floats go into the constant pool
+        let parser = Parser::new("3.14");
+        let program = parser.parse().unwrap();
+
+        let gen = CodeGenerator::new();
+        let bytecode = gen.generate(&program).unwrap();
+
+        // Check first 2 bytes are constant count
+        assert!(bytecode.len() >= 2);
+        let const_count = u16::from_le_bytes([bytecode[0], bytecode[1]]);
+        assert_eq!(const_count, 1, "Should have 1 constant");
+
+        // The bytecode should contain PushConst8 or PushConst16
+        // PushConst8 = 17
+        assert!(bytecode.contains(&17), "Should contain PushConst8 opcode");
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //!
 //! This module implements the main bytecode execution loop and opcode handlers.
 
+use alloc::vec::Vec;
 use crate::bytecode::{BytecodeReader, Opcode, Operand};
 use crate::context::Context;
 use crate::memory::HeapIndex;
@@ -19,6 +20,10 @@ pub struct VM {
     call_stack: CallStack,
     /// Current exception value (if any)
     exception: Option<JSValue>,
+    /// Constant pool for current function
+    constants: Vec<JSValue>,
+    /// Tracks which constants are f64 bits (true) vs JSValue (false)
+    const_is_f64: Vec<bool>,
 }
 
 /// VM execution result
@@ -50,6 +55,8 @@ impl VM {
             value_stack: ValueStack::new(value_stack_size),
             call_stack: CallStack::new(call_stack_depth),
             exception: None,
+            constants: Vec::new(),
+            const_is_f64: Vec::new(),
         }
     }
 
@@ -70,8 +77,46 @@ impl VM {
         // SAFETY: bytecode_ptr is valid as long as we don't modify the arena
         let bytecode_slice = unsafe { (*bytecode_ptr).as_slice() };
 
+        // Parse constant pool from bytecode
+        // Format: [constant_count: u16][(type: u8, value: usize)...][bytecode...]
+        // Type: 0 = f64 bits, 1 = JSValue
+        if bytecode_slice.len() < 2 {
+            return Err(self.throw_error(ctx, "Invalid bytecode format"));
+        }
+
+        let const_count = u16::from_le_bytes([bytecode_slice[0], bytecode_slice[1]]) as usize;
+        let const_entry_size = 1 + core::mem::size_of::<usize>(); // type byte + usize value
+        let header_size = 2 + const_count * const_entry_size;
+
+        if bytecode_slice.len() < header_size {
+            return Err(self.throw_error(ctx, "Invalid bytecode: truncated constant pool"));
+        }
+
+        // Read constants
+        self.constants.clear();
+        self.constants.reserve(const_count);
+        self.const_is_f64.clear();
+        self.const_is_f64.reserve(const_count);
+
+        for i in 0..const_count {
+            let offset = 2 + i * const_entry_size;
+            let const_type = bytecode_slice[offset];
+            let value_offset = offset + 1;
+
+            let mut bytes = [0u8; core::mem::size_of::<usize>()];
+            bytes.copy_from_slice(&bytecode_slice[value_offset..value_offset + core::mem::size_of::<usize>()]);
+            let raw = usize::from_le_bytes(bytes);
+
+            let value = unsafe { core::mem::transmute::<usize, JSValue>(raw) };
+            self.constants.push(value);
+            self.const_is_f64.push(const_type == 0);
+        }
+
+        // Get the actual bytecode after the constant pool
+        let code_slice = &bytecode_slice[header_size..];
+
         // Create a bytecode reader
-        let mut reader = BytecodeReader::new(bytecode_slice);
+        let mut reader = BytecodeReader::new(code_slice);
 
         // Create initial stack frame
         let frame = StackFrame::new(
@@ -300,6 +345,28 @@ impl VM {
                     Ok(None)
                 } else {
                     Err(self.throw_error(ctx, "Invalid operand"))
+                }
+            }
+
+            PushConst8 => {
+                if let Operand::Const8(idx) = instruction.operand {
+                    let value = self.get_constant(ctx, idx as u16)?;
+                    self.value_stack.push(value)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PushConst8"))
+                }
+            }
+
+            PushConst16 => {
+                if let Operand::Const16(idx) = instruction.operand {
+                    let value = self.get_constant(ctx, idx)?;
+                    self.value_stack.push(value)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PushConst16"))
                 }
             }
 
@@ -883,6 +950,85 @@ impl VM {
             // Nop - no operation
             Nop => Ok(None),
 
+            // ===== Global Variable Access =====
+            GetGlobal8 => {
+                if let Operand::Atom8(atom_idx) = instruction.operand {
+                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let value = ctx.get_global_property(atom)
+                        .unwrap_or(JSValue::undefined());
+                    self.value_stack.push(value)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for GetGlobal8"))
+                }
+            }
+
+            GetGlobal16 => {
+                if let Operand::Atom16(atom_idx) = instruction.operand {
+                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let value = ctx.get_global_property(atom)
+                        .unwrap_or(JSValue::undefined());
+                    self.value_stack.push(value)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for GetGlobal16"))
+                }
+            }
+
+            PutGlobal8 => {
+                if let Operand::Atom8(atom_idx) = instruction.operand {
+                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let value = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    ctx.set_global_property(atom, value)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PutGlobal8"))
+                }
+            }
+
+            PutGlobal16 => {
+                if let Operand::Atom16(atom_idx) = instruction.operand {
+                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let value = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    ctx.set_global_property(atom, value)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PutGlobal16"))
+                }
+            }
+
+            SetGlobal8 => {
+                if let Operand::Atom8(atom_idx) = instruction.operand {
+                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let value = self.value_stack.peek()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    ctx.set_global_property(atom, value)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for SetGlobal8"))
+                }
+            }
+
+            SetGlobal16 => {
+                if let Operand::Atom16(atom_idx) = instruction.operand {
+                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let value = self.value_stack.peek()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    ctx.set_global_property(atom, value)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for SetGlobal16"))
+                }
+            }
+
             // ===== Unimplemented Opcodes =====
             // These are stubs that need full implementation
             _ => {
@@ -898,6 +1044,30 @@ impl VM {
         // Create error string
         let err_msg = ctx.new_string(msg).unwrap_or(JSValue::undefined());
         err_msg
+    }
+
+    /// Helper: Gets a constant from the constant pool
+    /// For f64 constants, creates a new heap-allocated number
+    fn get_constant(&self, ctx: &mut Context, idx: u16) -> Result<JSValue, JSValue> {
+        if (idx as usize) >= self.constants.len() {
+            let err = ctx.new_string("Constant index out of bounds").unwrap_or(JSValue::undefined());
+            return Err(err);
+        }
+
+        let value = self.constants[idx as usize];
+        let is_f64 = self.const_is_f64.get(idx as usize).copied().unwrap_or(false);
+
+        // Check if this is a raw f64 using the type flag
+        if is_f64 {
+            // It's raw f64 bits - convert to heap number
+            let bits = value.as_raw() as u64;
+            let f = f64::from_bits(bits);
+            let err = ctx.new_string("Out of memory").unwrap_or(JSValue::undefined());
+            return ctx.new_number(f).map_err(|_| err);
+        }
+
+        // For other values (ints, special values), just return as-is
+        Ok(value)
     }
 
     /// Type conversion and operator implementations will be added below...
@@ -1104,7 +1274,13 @@ mod tests {
         writer.emit(&Instruction::new(Opcode::Add));
         writer.emit(&Instruction::new(Opcode::Return));
 
-        let bytecode = writer.finish();
+        let code = writer.finish();
+
+        // Add constant pool header: [count: u16][constants...][bytecode...]
+        let mut bytecode = Vec::new();
+        bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
+        bytecode.extend_from_slice(&code);
+
         let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();
 
         unsafe {
@@ -1131,7 +1307,13 @@ mod tests {
         writer.emit(&Instruction::new(Opcode::Swap));
         writer.emit(&Instruction::new(Opcode::Return));
 
-        let bytecode = writer.finish();
+        let code = writer.finish();
+
+        // Add constant pool header
+        let mut bytecode = Vec::new();
+        bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
+        bytecode.extend_from_slice(&code);
+
         let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();
 
         unsafe {
@@ -1168,7 +1350,13 @@ mod tests {
         writer.emit(&Instruction::new(Opcode::Push2));
         writer.emit(&Instruction::new(Opcode::Return));
 
-        let bytecode = writer.finish();
+        let code = writer.finish();
+
+        // Add constant pool header
+        let mut bytecode = Vec::new();
+        bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
+        bytecode.extend_from_slice(&code);
+
         let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();
 
         unsafe {

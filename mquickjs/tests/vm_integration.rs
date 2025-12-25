@@ -2,6 +2,9 @@
 //!
 //! These tests demonstrate the VM executing various bytecode programs.
 
+extern crate alloc;
+use alloc::vec::Vec;
+
 use mquickjs::{
     Context,
     bytecode::{BytecodeWriter, Instruction, Opcode},
@@ -14,7 +17,12 @@ fn execute_bytecode(ctx: &mut Context, instructions: &[Instruction]) -> Result<m
     for inst in instructions {
         writer.emit(inst);
     }
-    let bytecode = writer.finish();
+    let code = writer.finish();
+
+    // Add constant pool header: [count: u16][constants...][bytecode...]
+    let mut bytecode = Vec::new();
+    bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
+    bytecode.extend_from_slice(&code);
 
     // Allocate bytecode array
     let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();

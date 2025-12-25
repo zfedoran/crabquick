@@ -393,4 +393,112 @@ mod tests {
         let result = engine.eval("").unwrap();
         assert!(result.is_undefined());
     }
+
+    #[test]
+    fn test_eval_float() {
+        let mut engine = Engine::new(8192);
+
+        // Test basic float
+        let result = engine.eval("3.14").unwrap();
+        let num = engine.context.get_number(result).expect("Should be a number");
+        assert!((num - 3.14).abs() < 0.0001);
+
+        // Test larger float
+        let result = engine.eval("123.456").unwrap();
+        let num = engine.context.get_number(result).expect("Should be a number");
+        assert!((num - 123.456).abs() < 0.0001);
+
+        // Test negative float
+        let result = engine.eval("-99.99").unwrap();
+        let num = engine.context.get_number(result).expect("Should be a number");
+        assert!((num - (-99.99)).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_eval_large_integer() {
+        let mut engine = Engine::new(8192);
+
+        // Test large integers that don't fit in i8 or i16
+        let result = engine.eval("12345").unwrap();
+        // Large integers may be stored as i32
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 12345);
+        } else {
+            // Or as float
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 12345.0);
+        }
+
+        let result = engine.eval("1000000").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 1000000);
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 1000000.0);
+        }
+    }
+
+    #[test]
+    fn test_eval_float_arithmetic() {
+        let mut engine = Engine::new(8192);
+
+        // Test simple literal first
+        let result = engine.eval("1.5").unwrap();
+        let num = engine.context.get_number(result).expect("1.5 should be a number");
+        assert!((num - 1.5).abs() < 0.0001, "Expected 1.5, got {}", num);
+
+        // Test float arithmetic
+        let result = engine.eval("1.5 + 2.5").unwrap();
+        // Check if it's an integer first
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 4, "Float arithmetic should return 4 as integer");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert!((num - 4.0).abs() < 0.0001, "Float arithmetic should be 4.0, got {}", num);
+        }
+
+        let result = engine.eval("10.0 / 3.0").unwrap();
+        let num = engine.context.get_number(result).expect("Should be a number");
+        assert!((num - 3.333333).abs() < 0.0001, "Division should be ~3.333, got {}", num);
+    }
+
+    #[test]
+    fn test_eval_global_assignment() {
+        let mut engine = Engine::new(8192);
+        let result = engine.eval("x = 5; x").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(5.0));
+    }
+
+    #[test]
+    fn test_eval_global_multiple() {
+        let mut engine = Engine::new(8192);
+        let result = engine.eval("a = 10; b = 20; a + b").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(30.0));
+    }
+
+    #[test]
+    fn test_eval_global_persistence() {
+        let mut engine = Engine::new(8192);
+
+        // Set a global variable
+        engine.eval("x = 42").unwrap();
+
+        // Access it in a later eval
+        let result = engine.eval("x").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(42.0));
+
+        // Modify it
+        engine.eval("x = x + 8").unwrap();
+        let result = engine.eval("x").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(50.0));
+    }
+
+    #[test]
+    fn test_eval_global_expression_sequence() {
+        let mut engine = Engine::new(8192);
+
+        // Test that global assignments work in expression sequences
+        let result = engine.eval("y = 5; z = y * 2; z + 3").unwrap();
+        assert_eq!(engine.context.get_number(result), Some(13.0));
+    }
 }

@@ -29,9 +29,11 @@ use alloc::string::ToString;
 /// built-in objects. Full ECMAScript compliance would require much more
 /// extensive initialization.
 pub fn init_runtime(ctx: &mut Context) -> Result<JSValue, JSValue> {
-    // Create the global object
-    let global = ctx.new_object()
-        .map_err(|_| make_error(ctx, "Out of memory creating global object"))?;
+    // Get the global object (should already be created in Context::new())
+    let global = ctx.global_object();
+    if global.is_null() {
+        return Err(make_error(ctx, "Global object not initialized"));
+    }
 
     // Install global constants
     install_global_constants(ctx, global)?;
