@@ -6,18 +6,54 @@ use crate::context::Context;
 /// Native function type
 pub type NativeFn = fn(&mut Context, JSValue, &[JSValue]) -> Result<JSValue, JSValue>;
 
-/// Function bytecode
+/// Bytecode function object
+/// Stores a reference to compiled bytecode and metadata
+#[repr(C)]
+pub struct JSBytecodeFunction {
+    /// Index to the bytecode array in the heap
+    pub bytecode_index: crate::memory::HeapIndex,
+    /// Number of parameters
+    pub param_count: u8,
+    /// Number of local variable slots (including parameters)
+    pub local_count: u8,
+    /// Reserved for future use
+    _reserved: u16,
+}
+
+impl JSBytecodeFunction {
+    /// Creates a new bytecode function
+    pub fn new(
+        bytecode_index: crate::memory::HeapIndex,
+        param_count: u8,
+        local_count: u8,
+    ) -> Self {
+        JSBytecodeFunction {
+            bytecode_index,
+            param_count,
+            local_count,
+            _reserved: 0,
+        }
+    }
+
+    /// Returns the bytecode index
+    pub fn bytecode_index(&self) -> crate::memory::HeapIndex {
+        self.bytecode_index
+    }
+
+    /// Returns the parameter count
+    pub fn param_count(&self) -> u8 {
+        self.param_count
+    }
+
+    /// Returns the local count
+    pub fn local_count(&self) -> u8 {
+        self.local_count
+    }
+}
+
+/// Old JSFunction structure - kept for compatibility
 pub struct JSFunction {
-    // TODO: Implement fields:
-    // - func_name: JSValue
-    // - byte_code: JSValue (JSByteArray index)
-    // - cpool: JSValue (constant pool - JSValueArray)
-    // - vars: JSValue (variable names)
-    // - ext_vars: JSValue (external variables for closures)
-    // - stack_size: u16
-    // - arg_count: u16
-    // - filename: JSValue
-    // - pc2line: JSValue (debug info)
+    // TODO: Implement fields for full QuickJS compatibility if needed
     _placeholder: u8,
 }
 
@@ -31,13 +67,11 @@ impl JSFunction {
 
     /// Returns the function name
     pub fn name(&self) -> JSValue {
-        // TODO: Return func_name field
         JSValue::undefined()
     }
 
     /// Returns the argument count
     pub fn arg_count(&self) -> u16 {
-        // TODO: Return arg_count field
         0
     }
 }

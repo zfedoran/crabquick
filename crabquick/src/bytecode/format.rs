@@ -176,7 +176,7 @@ impl<'a> BytecodeReader<'a> {
     }
 
     /// Reads a u8 from the bytecode
-    fn read_u8(&mut self) -> Option<u8> {
+    pub fn read_u8(&mut self) -> Option<u8> {
         if self.pc < self.bytecode.len() {
             let val = self.bytecode[self.pc];
             self.pc += 1;

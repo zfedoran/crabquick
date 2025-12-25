@@ -595,4 +595,53 @@ mod tests {
             panic!("Math.abs should be a native function but got None from get_native_function");
         }
     }
+
+    #[test]
+    fn test_function_declaration_simple() {
+        let mut engine = Engine::new(8192);
+
+        // Do everything in one eval - function declaration followed by call
+        let result = engine.eval("function add(a, b) { return a + b; } add(2, 3)").unwrap();
+        println!("Result: {:?}, is_int: {}, is_ptr: {}, is_undef: {}",
+            result, result.is_int(), result.is_ptr(), result.is_undefined());
+        if let Some(num) = engine.context.get_number(result) {
+            println!("As number: {}", num);
+        }
+        assert_eq!(result.to_int(), Some(5), "Simple function call should return 5");
+    }
+
+    #[test]
+    fn test_function_declaration_no_params() {
+        let mut engine = Engine::new(8192);
+        let result = engine.eval("function getFortyTwo() { return 42; } getFortyTwo()").unwrap();
+        assert_eq!(result.to_int(), Some(42), "No-param function should return 42");
+    }
+
+    #[test]
+    fn test_function_one_param() {
+        let mut engine = Engine::new(8192);
+        let result = engine.eval("function double(x) { return x * 2; } double(21)").unwrap();
+        assert_eq!(result.to_int(), Some(42), "Double function should return 42");
+    }
+
+    #[test]
+    fn test_function_with_local_var() {
+        let mut engine = Engine::new(8192);
+        let result = engine.eval("function sum(a, b) { var result = a + b; return result; } sum(5, 7)").unwrap();
+        assert_eq!(result.to_int(), Some(12), "Function with local var should return 12");
+    }
+
+    #[test]
+    fn test_function_recursive_factorial() {
+        let mut engine = Engine::new(8192);
+        let result = engine.eval("function factorial(n) { if (n <= 1) return 1; return n * factorial(n - 1); } factorial(5)").unwrap();
+        assert_eq!(result.to_int(), Some(120), "Factorial(5) should return 120");
+    }
+
+    #[test]
+    fn test_function_recursive_fibonacci() {
+        let mut engine = Engine::new(8192);
+        let result = engine.eval("function fib(n) { if (n <= 1) return n; return fib(n - 1) + fib(n - 2); } fib(10)").unwrap();
+        assert_eq!(result.to_int(), Some(55), "Fibonacci(10) should return 55");
+    }
 }

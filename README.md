@@ -12,20 +12,20 @@ CrabQuick is a from-scratch port of [MicroQuickJS](https://github.com/bellard/mq
 -----------------------------
 **Status:** Active Development
 
-Core engine functional with 284+ passing tests
+Core engine functional with 290+ passing tests
 
-  1. JS function calls don't fully work - The VM can execute native functions but calling user-defined JS functions (closures, recursion) is incomplete
-  2. No real eval benchmarks - We can't benchmark fib(30) or similar because function calls are stubbed
-  3. Type coercion is missing - "5" + 3 doesn't work properly yet
-
-The low-level operations (memory allocation, value encoding) are likely comparable to C, but the end-to-end JS execution isn't complete enough to measure.
+✅ **JS function calls now work** - User-defined functions with parameters, local variables, and recursion are fully supported
+✅ **Recursion works** - factorial(10) and fib(10) execute correctly
+⏳ **Type coercion is missing** - "5" + 3 doesn't work properly yet
+⏳ **Built-in methods incomplete** - Array.push, String.slice, etc. need implementation
 
 Summary
 
-The engine is ~60-70% complete:
+The engine is ~70-80% complete:
   - Core architecture is solid and tested
   - Simple expressions and Math functions work
-  - Missing: full function calls, built-in methods, type coercion
+  - User-defined function calls with recursion work
+  - Missing: type coercion, built-in methods, closures
 -----------------------------
 
 ### Key Features

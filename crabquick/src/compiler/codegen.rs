@@ -95,6 +95,14 @@ struct LoopContext {
     continue_label: LabelId,
 }
 
+/// Function bytecode entry
+#[derive(Debug, Clone)]
+struct FunctionBytecode {
+    bytecode: Vec<u8>,
+    param_count: u8,
+    local_count: u8,
+}
+
 /// Code generator
 pub struct CodeGenerator {
     writer: BytecodeWriter,
@@ -108,6 +116,8 @@ pub struct CodeGenerator {
     atom_table: BTreeMap<String, u16>,
     /// Atom strings in order (index -> string)
     atom_strings: Vec<String>,
+    /// Function bytecode table
+    function_bytecodes: Vec<FunctionBytecode>,
 }
 
 impl CodeGenerator {
@@ -122,6 +132,7 @@ impl CodeGenerator {
             loop_stack: Vec::new(),
             atom_table: BTreeMap::new(),
             atom_strings: Vec::new(),
+            function_bytecodes: Vec::new(),
         }
     }
 
@@ -153,9 +164,10 @@ impl CodeGenerator {
             self.emit_simple(Opcode::ReturnUndef);
         }
 
-        // Serialize the constant pool, atom table, and bytecode
+        // Serialize the constant pool, atom table, function table, and bytecode
         // Format: [constant_count: u16][(type: u8, value: usize)...]
         //         [atom_count: u16][(len: u16, string_bytes)...]
+        //         [function_count: u16][(param_count: u8, local_count: u8, bytecode_len: u32, bytecode_bytes)...]
         //         [bytecode...]
         // Type: 0 = f64 bits, 1 = JSValue
         let mut result = Vec::new();
@@ -185,6 +197,110 @@ impl CodeGenerator {
             let len = bytes.len() as u16;
             result.extend_from_slice(&len.to_le_bytes());
             result.extend_from_slice(bytes);
+        }
+
+        // Write function count and function bytecodes
+        let func_count = self.function_bytecodes.len() as u16;
+        result.extend_from_slice(&func_count.to_le_bytes());
+
+        for func in &self.function_bytecodes {
+            result.push(func.param_count);
+            result.push(func.local_count);
+            let bytecode_len = func.bytecode.len() as u32;
+            result.extend_from_slice(&bytecode_len.to_le_bytes());
+            result.extend_from_slice(&func.bytecode);
+        }
+
+        // Append the main bytecode
+        result.extend_from_slice(self.writer.as_slice());
+
+        Ok(result)
+    }
+
+    /// Compiles a function body into bytecode
+    ///
+    /// Creates a new code generator with a fresh scope containing parameters,
+    /// compiles the function body, and returns the complete bytecode plus local count.
+    fn compile_function_body(&mut self, params: &[String], body: &[Stmt]) -> CodeGenResult<(Vec<u8>, u8)> {
+        // Create a new code generator for the function
+        let mut func_gen = CodeGenerator::new();
+
+        // Create a new scope and add parameters as local variables
+        for param in params {
+            func_gen.scope.add_binding(param.clone(), VarKind::Var);
+        }
+
+        // Compile all statements in the function body
+        let last_idx = body.len().saturating_sub(1);
+        for (i, stmt) in body.iter().enumerate() {
+            let is_last = i == last_idx;
+
+            // Check if this is a return statement
+            if matches!(stmt, Stmt::Return { .. }) {
+                func_gen.gen_stmt(stmt)?;
+                // Return statement already emits Return opcode
+            } else if is_last && matches!(stmt, Stmt::Expression { .. }) {
+                // Last expression - don't return its value, just drop it
+                func_gen.gen_stmt(stmt)?;
+            } else {
+                func_gen.gen_stmt(stmt)?;
+            }
+        }
+
+        // If the function doesn't end with an explicit return, emit ReturnUndef
+        if body.is_empty() || !matches!(body.last(), Some(Stmt::Return { .. })) {
+            func_gen.emit_simple(Opcode::ReturnUndef);
+        }
+
+        // Get the local count (includes params and local vars)
+        let local_count = func_gen.scope.bindings.len() as u8;
+
+        // Generate the complete bytecode (includes constant pool and atom table)
+        Ok((func_gen.generate_raw()?, local_count))
+    }
+
+    /// Generates raw bytecode without wrapping in a Program
+    fn generate_raw(self) -> CodeGenResult<Vec<u8>> {
+        let mut result = Vec::new();
+
+        // Write constant count
+        let const_count = self.constants.len() as u16;
+        result.extend_from_slice(&const_count.to_le_bytes());
+
+        // Write constants with type tags
+        for i in 0..self.constants.len() {
+            if let Some(value) = self.constants.get(i as u16) {
+                let raw = value.as_raw();
+                let is_f64 = self.const_is_f64.get(i).copied().unwrap_or(false);
+
+                result.push(if is_f64 { 0u8 } else { 1u8 });
+                result.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+
+        // Write atom count
+        let atom_count = self.atom_strings.len() as u16;
+        result.extend_from_slice(&atom_count.to_le_bytes());
+
+        // Write atom strings
+        for atom_str in &self.atom_strings {
+            let bytes = atom_str.as_bytes();
+            let len = bytes.len() as u16;
+            result.extend_from_slice(&len.to_le_bytes());
+            result.extend_from_slice(bytes);
+        }
+
+        // Write function count (0 for simple functions without nested functions)
+        let func_count = self.function_bytecodes.len() as u16;
+        result.extend_from_slice(&func_count.to_le_bytes());
+
+        // Write function bytecodes (if any nested functions)
+        for func in &self.function_bytecodes {
+            result.push(func.param_count);
+            result.push(func.local_count);
+            let bytecode_len = func.bytecode.len() as u32;
+            result.extend_from_slice(&bytecode_len.to_le_bytes());
+            result.extend_from_slice(&func.bytecode);
         }
 
         // Append the bytecode
@@ -300,13 +416,40 @@ impl CodeGenerator {
             }
 
             Stmt::FunctionDecl { name, params, body, .. } => {
-                // Add function to scope
-                let index = self.scope.add_binding(name.clone(), VarKind::Var);
+                // Compile function body to bytecode
+                let (func_bytecode, local_count) = self.compile_function_body(params, body)?;
+                let param_count = params.len() as u8;
 
-                // For now, create a stub - full function compilation would require
-                // compiling the function body separately and storing as a constant
-                self.emit_simple(Opcode::Undefined);
-                self.emit(Instruction::with_u8(Opcode::PutLoc, index));
+                // Add to function table
+                let func_index = self.function_bytecodes.len() as u16;
+                self.function_bytecodes.push(FunctionBytecode {
+                    bytecode: func_bytecode,
+                    param_count,
+                    local_count,
+                });
+
+                // Emit instruction to create function object from function table
+                // PushFunc8 takes a function table index and creates a function object
+                if func_index <= 255 {
+                    self.emit(Instruction::with_u8(Opcode::PushFunc8, func_index as u8));
+                } else {
+                    self.emit(Instruction::with_u16(Opcode::PushFunc, func_index));
+                }
+
+                // Check if we're at global scope (no parent)
+                if self.scope.parent.is_none() {
+                    // Global scope - use PutGlobal
+                    let atom_id = self.get_or_create_atom(name);
+                    if atom_id <= 255 {
+                        self.emit(Instruction::with_atom8(Opcode::PutGlobal8, atom_id as u8));
+                    } else {
+                        self.emit(Instruction::with_atom16(Opcode::PutGlobal16, atom_id));
+                    }
+                } else {
+                    // Local scope - add to scope and use PutLoc
+                    let index = self.scope.add_binding(name.clone(), VarKind::Var);
+                    self.emit(Instruction::with_u8(Opcode::PutLoc, index));
+                }
 
                 Ok(())
             }

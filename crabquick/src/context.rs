@@ -788,6 +788,54 @@ impl Context {
             Some(self.arena.get(index))
         }
     }
+
+    /// Creates a new bytecode function object
+    ///
+    /// # Arguments
+    ///
+    /// * `bytecode_index` - HeapIndex pointing to the function's bytecode
+    /// * `param_count` - Number of parameters
+    /// * `local_count` - Number of local variables (including parameters)
+    ///
+    /// # Returns
+    ///
+    /// A JSValue wrapping the bytecode function
+    pub fn new_bytecode_function(
+        &mut self,
+        bytecode_index: crate::memory::HeapIndex,
+        param_count: u8,
+        local_count: u8,
+    ) -> Result<JSValue, crate::memory::allocator::OutOfMemory> {
+        use crate::object::function::JSBytecodeFunction;
+
+        // Calculate size: MemBlockHeader + JSBytecodeFunction
+        let total_size = core::mem::size_of::<crate::memory::MemBlockHeader>()
+            + core::mem::size_of::<JSBytecodeFunction>();
+
+        // Allocate memory
+        let index = unsafe { self.alloc_raw(total_size, MemTag::FunctionBytecode)? };
+
+        // Initialize the bytecode function
+        unsafe {
+            let func: &mut JSBytecodeFunction = self.arena.get_mut(index);
+            *func = JSBytecodeFunction::new(bytecode_index, param_count, local_count);
+        }
+
+        Ok(JSValue::from_ptr(index))
+    }
+
+    /// Gets a reference to a bytecode function
+    pub fn get_bytecode_function(&self, val: JSValue) -> Option<&crate::object::function::JSBytecodeFunction> {
+        let index = val.to_ptr()?;
+
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::FunctionBytecode {
+                return None;
+            }
+            Some(self.arena.get(index))
+        }
+    }
 }
 
 impl Drop for Context {

@@ -13,6 +13,14 @@ use super::stack::{
     StackOverflow, StackUnderflow, CallStackOverflow,
 };
 
+/// Function entry from function table
+#[derive(Debug, Clone)]
+struct FunctionEntry {
+    bytecode_index: HeapIndex,
+    param_count: u8,
+    local_count: u8,
+}
+
 /// Virtual machine state
 pub struct VM {
     /// Value stack for operand evaluation
@@ -27,6 +35,8 @@ pub struct VM {
     const_is_f64: Vec<bool>,
     /// Atom table (index -> string)
     atom_table: Vec<String>,
+    /// Function table (precompiled functions)
+    function_table: Vec<FunctionEntry>,
 }
 
 /// VM execution result
@@ -61,6 +71,7 @@ impl VM {
             constants: Vec::new(),
             const_is_f64: Vec::new(),
             atom_table: Vec::new(),
+            function_table: Vec::new(),
         }
     }
 
@@ -151,7 +162,60 @@ impl VM {
             self.atom_table.push(string.to_string());
         }
 
-        // Get the actual bytecode after the constant pool and atom table
+        // Read function table
+        if bytecode_slice.len() < offset + 2 {
+            return Err(self.throw_error(ctx, "Invalid bytecode: missing function count"));
+        }
+        let func_count = u16::from_le_bytes([bytecode_slice[offset], bytecode_slice[offset + 1]]) as usize;
+        offset += 2;
+
+        self.function_table.clear();
+        self.function_table.reserve(func_count);
+
+        for _ in 0..func_count {
+            // Read param_count (u8), local_count (u8), bytecode_len (u32), then bytecode bytes
+            if bytecode_slice.len() < offset + 6 {
+                return Err(self.throw_error(ctx, "Invalid bytecode: truncated function table"));
+            }
+
+            let param_count = bytecode_slice[offset];
+            offset += 1;
+            let local_count = bytecode_slice[offset];
+            offset += 1;
+
+            let mut len_bytes = [0u8; 4];
+            len_bytes.copy_from_slice(&bytecode_slice[offset..offset + 4]);
+            offset += 4;
+            let bytecode_len = u32::from_le_bytes(len_bytes) as usize;
+
+            if bytecode_slice.len() < offset + bytecode_len {
+                return Err(self.throw_error(ctx, "Invalid bytecode: truncated function bytecode"));
+            }
+
+            let func_bytecode = &bytecode_slice[offset..offset + bytecode_len];
+            offset += bytecode_len;
+
+            // Allocate a ByteArray for this function's bytecode
+            let func_bc_index = ctx.alloc_byte_array(bytecode_len)
+                .map_err(|_| self.throw_error(ctx, "Out of memory allocating function bytecode"))?;
+
+            // Copy the bytecode to the allocated array
+            unsafe {
+                if let Some(bc_array) = ctx.get_byte_array_mut(func_bc_index) {
+                    let slice = bc_array.as_full_mut_slice();
+                    slice[..bytecode_len].copy_from_slice(func_bytecode);
+                    bc_array.header_mut().set_count(bytecode_len);
+                }
+            }
+
+            self.function_table.push(FunctionEntry {
+                bytecode_index: func_bc_index,
+                param_count,
+                local_count,
+            });
+        }
+
+        // Get the actual bytecode after the constant pool, atom table, and function table
         let code_slice = &bytecode_slice[offset..];
 
         // Create a bytecode reader
@@ -502,6 +566,54 @@ impl VM {
                 self.value_stack.push(val)
                     .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
                 Ok(None)
+            }
+
+            PushFunc8 => {
+                if let Operand::U8(func_idx) = instruction.operand {
+                    // Get function from function table
+                    if (func_idx as usize) >= self.function_table.len() {
+                        return Err(self.throw_error(ctx, "Function index out of bounds"));
+                    }
+
+                    let func_entry = &self.function_table[func_idx as usize];
+
+                    // Create a bytecode function object
+                    let func_val = ctx.new_bytecode_function(
+                        func_entry.bytecode_index,
+                        func_entry.param_count,
+                        func_entry.local_count,
+                    ).map_err(|_| self.throw_error(ctx, "Out of memory creating function"))?;
+
+                    self.value_stack.push(func_val)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PushFunc8"))
+                }
+            }
+
+            PushFunc => {
+                if let Operand::U16(func_idx) = instruction.operand {
+                    // Get function from function table
+                    if (func_idx as usize) >= self.function_table.len() {
+                        return Err(self.throw_error(ctx, "Function index out of bounds"));
+                    }
+
+                    let func_entry = &self.function_table[func_idx as usize];
+
+                    // Create a bytecode function object
+                    let func_val = ctx.new_bytecode_function(
+                        func_entry.bytecode_index,
+                        func_entry.param_count,
+                        func_entry.local_count,
+                    ).map_err(|_| self.throw_error(ctx, "Out of memory creating function"))?;
+
+                    self.value_stack.push(func_val)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PushFunc"))
+                }
             }
 
             // ===== Arithmetic Operations =====
@@ -1087,13 +1199,56 @@ impl VM {
                     let func = self.value_stack.pop()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
 
-                    // Call the function
-                    let result = ctx.call_function(func, JSValue::undefined(), &args)?;
+                    // Check if it's a bytecode function
+                    if let Some(bc_func) = ctx.get_bytecode_function(func) {
+                        // This is a bytecode function - execute it within the VM
+                        // For now, we'll execute it immediately and push the result
+                        // TODO: This is a simplified implementation - ideally we'd save
+                        // the current reader state and switch to executing the function's bytecode
 
-                    // Push result
-                    self.value_stack.push(result)
-                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
-                    Ok(None)
+                        // Get the function's bytecode
+                        let func_bc_index = bc_func.bytecode_index();
+                        let param_count = bc_func.param_count() as usize;
+                        let local_count = bc_func.local_count() as usize;
+
+                        // Pad args if needed (undefined for missing params)
+                        while args.len() < param_count {
+                            args.push(JSValue::undefined());
+                        }
+
+                        // Push arguments onto the stack as locals (simplified for now)
+                        let base_sp = self.value_stack.len();
+                        for arg in &args {
+                            self.value_stack.push(*arg)
+                                .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        // Reserve space for additional locals
+                        for _ in param_count..local_count {
+                            self.value_stack.push(JSValue::undefined())
+                                .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        // Create a new bytecode reader for the function
+                        // Execute the function in a simplified way for now
+                        let result = self.execute_bytecode_function(ctx, func_bc_index, base_sp, local_count)?;
+
+                        // Clean up local variables from stack
+                        self.value_stack.truncate(base_sp);
+
+                        // Push result
+                        self.value_stack.push(result)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        Ok(None)
+                    } else {
+                        // Not a bytecode function - try native function
+                        let result = ctx.call_function(func, JSValue::undefined(), &args)?;
+
+                        // Push result
+                        self.value_stack.push(result)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        Ok(None)
+                    }
                 } else {
                     Err(self.throw_error(ctx, "Invalid operand for Call"))
                 }
@@ -1409,6 +1564,174 @@ impl VM {
         let b_int = (b.to_int().unwrap_or(0) & 0x1F) as u32;
         Ok(JSValue::from_int((a_int >> b_int) as i32))
     }
+
+    /// Executes a bytecode function
+    ///
+    /// This is a simplified implementation that executes the function's bytecode
+    /// with local variables stored on the value stack.
+    fn execute_bytecode_function(
+        &mut self,
+        ctx: &mut Context,
+        bytecode_index: HeapIndex,
+        base_sp: usize,
+        local_count: usize,
+    ) -> VMResult {
+        // Get the bytecode array
+        let bytecode_ptr: *const crate::value::JSByteArray = match ctx.get_byte_array(bytecode_index) {
+            Some(b) => b as *const _,
+            None => return Err(self.throw_error(ctx, "Invalid function bytecode")),
+        };
+
+        // SAFETY: bytecode_ptr is valid as long as we don't modify the arena
+        let bytecode_slice = unsafe { (*bytecode_ptr).as_slice() };
+
+        // Parse the function's own constant pool and atom table
+        // (Each function has its own embedded tables)
+        // For now, we'll create a new bytecode reader from the raw code
+
+        // Skip the constant pool, atom table, and function table headers
+        // Since function bytecode is a complete standalone bytecode unit,
+        // we need to parse it like a mini-program
+
+        // This is complex - for now, let's use a simplified approach:
+        // Execute with a new reader but reuse our stacks
+        let mut reader = BytecodeReader::new(bytecode_slice);
+
+        // We need to offset all GetLoc/PutLoc operations by base_sp
+        // For now, let's execute the bytecode directly (simplified)
+        // The local variable operations will need to be adjusted
+
+        // Actually, we already have locals on the stack at base_sp
+        // So we just need to execute the bytecode and intercept GetLoc/SetLoc
+
+        // For simplicity, let's parse the minimal headers and execute
+        self.execute_function_bytecode(ctx, &mut reader, base_sp)
+    }
+
+    /// Executes function bytecode with proper local variable handling
+    fn execute_function_bytecode(
+        &mut self,
+        ctx: &mut Context,
+        reader: &mut BytecodeReader,
+        base_sp: usize,
+    ) -> VMResult {
+        // Parse headers (constants, atoms, functions)
+        // Function bytecode has the same format as main bytecode:
+        // [const_count: u16][constants...][atom_count: u16][atoms...][func_count: u16][funcs...][code]
+
+        // We need to skip these headers to get to the actual code
+        // For now, read them into temporary storage (simplified)
+
+        // Read but don't use the constant pool (function has its own)
+        // TODO: Properly parse and save these for nested functions
+
+        // Skip constant pool
+        // Read count
+        let const_count = {
+            let byte0 = reader.read_u8().unwrap_or(0);
+            let byte1 = reader.read_u8().unwrap_or(0);
+            u16::from_le_bytes([byte0, byte1]) as usize
+        };
+
+        // Skip constants (type byte + usize each)
+        for _ in 0..const_count {
+            reader.read_u8(); // type
+            for _ in 0..core::mem::size_of::<usize>() {
+                reader.read_u8();
+            }
+        }
+
+        // Skip atom table
+        let atom_count = {
+            let byte0 = reader.read_u8().unwrap_or(0);
+            let byte1 = reader.read_u8().unwrap_or(0);
+            u16::from_le_bytes([byte0, byte1]) as usize
+        };
+
+        for _ in 0..atom_count {
+            let len = {
+                let byte0 = reader.read_u8().unwrap_or(0);
+                let byte1 = reader.read_u8().unwrap_or(0);
+                u16::from_le_bytes([byte0, byte1]) as usize
+            };
+            for _ in 0..len {
+                reader.read_u8();
+            }
+        }
+
+        // Skip function table
+        let func_count = {
+            let byte0 = reader.read_u8().unwrap_or(0);
+            let byte1 = reader.read_u8().unwrap_or(0);
+            u16::from_le_bytes([byte0, byte1]) as usize
+        };
+
+        for _ in 0..func_count {
+            reader.read_u8(); // param_count
+            reader.read_u8(); // local_count
+            let bytecode_len = {
+                let mut bytes = [0u8; 4];
+                for i in 0..4 {
+                    bytes[i] = reader.read_u8().unwrap_or(0);
+                }
+                u32::from_le_bytes(bytes) as usize
+            };
+            for _ in 0..bytecode_len {
+                reader.read_u8();
+            }
+        }
+
+        // Now execute the actual code
+        loop {
+            let instruction = match reader.decode() {
+                Some(inst) => inst,
+                None => return Ok(JSValue::undefined()),
+            };
+
+            // Handle local variable access specially
+            match instruction.opcode {
+                Opcode::GetLoc => {
+                    if let Operand::U8(idx) = instruction.operand {
+                        let local_val = self.value_stack.get(base_sp + idx as usize)
+                            .map_err(|_| self.throw_error(ctx, "Invalid local variable index"))?;
+                        self.value_stack.push(local_val)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    }
+                }
+                Opcode::PutLoc => {
+                    if let Operand::U8(idx) = instruction.operand {
+                        let val = self.value_stack.pop()
+                            .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                        self.value_stack.set(base_sp + idx as usize, val)
+                            .map_err(|_| self.throw_error(ctx, "Invalid local variable index"))?;
+                    }
+                }
+                Opcode::SetLoc => {
+                    if let Operand::U8(idx) = instruction.operand {
+                        let val = self.value_stack.peek()
+                            .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                        self.value_stack.set(base_sp + idx as usize, val)
+                            .map_err(|_| self.throw_error(ctx, "Invalid local variable index"))?;
+                    }
+                }
+                Opcode::Return => {
+                    let ret_val = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    return Ok(ret_val);
+                }
+                Opcode::ReturnUndef => {
+                    return Ok(JSValue::undefined());
+                }
+                _ => {
+                    // For other opcodes, execute normally
+                    match self.execute_instruction(ctx, reader, &instruction)? {
+                        Some(ret) => return Ok(ret),
+                        None => continue,
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Default for VM {
@@ -1443,10 +1766,11 @@ mod tests {
 
         let code = writer.finish();
 
-        // Add constant pool header and atom table: [const_count: u16][constants...][atom_count: u16][atoms...][bytecode...]
+        // Add headers: [const_count: u16][constants...][atom_count: u16][atoms...][func_count: u16][funcs...][bytecode...]
         let mut bytecode = Vec::new();
         bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
         bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 atoms
+        bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 functions
         bytecode.extend_from_slice(&code);
 
         let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();
@@ -1477,10 +1801,11 @@ mod tests {
 
         let code = writer.finish();
 
-        // Add constant pool header and atom table
+        // Add headers
         let mut bytecode = Vec::new();
         bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
         bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 atoms
+        bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 functions
         bytecode.extend_from_slice(&code);
 
         let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();
@@ -1521,10 +1846,11 @@ mod tests {
 
         let code = writer.finish();
 
-        // Add constant pool header and atom table
+        // Add headers
         let mut bytecode = Vec::new();
         bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
         bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 atoms
+        bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 functions
         bytecode.extend_from_slice(&code);
 
         let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();

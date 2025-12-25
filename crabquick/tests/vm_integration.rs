@@ -19,11 +19,12 @@ fn execute_bytecode(ctx: &mut Context, instructions: &[Instruction]) -> Result<c
     }
     let code = writer.finish();
 
-    // Add constant pool and atom table headers
-    // Format: [const_count: u16][constants...][atom_count: u16][atoms...][bytecode...]
+    // Add headers
+    // Format: [const_count: u16][constants...][atom_count: u16][atoms...][func_count: u16][funcs...][bytecode...]
     let mut bytecode = Vec::new();
     bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
     bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 atoms
+    bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 functions
     bytecode.extend_from_slice(&code);
 
     // Allocate bytecode array

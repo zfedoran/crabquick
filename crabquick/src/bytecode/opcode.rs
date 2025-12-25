@@ -93,6 +93,10 @@ pub enum Opcode {
     PushInfinity = 31,
     /// Push -Infinity
     PushNegInfinity = 32,
+    /// Push function from function table (8-bit index)
+    PushFunc8 = 33,
+    /// Push function from function table (16-bit index)
+    PushFunc = 34,
 
     // ===== Variable Access =====
     /// Get local variable
@@ -464,6 +468,8 @@ impl Opcode {
             Opcode::PushNaN => "push_nan",
             Opcode::PushInfinity => "push_infinity",
             Opcode::PushNegInfinity => "push_neg_infinity",
+            Opcode::PushFunc8 => "push_func8",
+            Opcode::PushFunc => "push_func",
 
             // Variable access
             Opcode::GetLoc => "get_loc",
@@ -670,7 +676,7 @@ impl Opcode {
             Opcode::Call | Opcode::TailCall |
             Opcode::CallMethod | Opcode::TailCallMethod |
             Opcode::CallConstructor | Opcode::Apply | Opcode::ApplyEval |
-            Opcode::Array | Opcode::Object => U8,
+            Opcode::Array | Opcode::Object | Opcode::PushFunc8 => U8,
 
             // Atom8 operands (for global variable names)
             Opcode::GetGlobal8 | Opcode::PutGlobal8 | Opcode::SetGlobal8 => Atom8,
@@ -684,7 +690,8 @@ impl Opcode {
             // U16 operands
             Opcode::GetField | Opcode::PutField | Opcode::DefineField | Opcode::SetField |
             Opcode::GetPrivateField | Opcode::PutPrivateField |
-            Opcode::GetSuper | Opcode::PutSuper | Opcode::DefineArrayEl | Opcode::SetSuper => U16,
+            Opcode::GetSuper | Opcode::PutSuper | Opcode::DefineArrayEl | Opcode::SetSuper |
+            Opcode::PushFunc => U16,
 
             // I16 operands
             Opcode::PushI16 => I16,
@@ -742,7 +749,7 @@ impl Opcode {
         // SAFETY: We validate that the u8 value corresponds to a valid opcode
         // The repr(u8) ensures this is a valid representation
         match val {
-            0..=10 | 11..=32 | 40..=66 | 70..=85 | 90..=101 |
+            0..=10 | 11..=34 | 40..=66 | 70..=85 | 90..=101 |
             110..=119 | 130..=133 | 140..=146 | 160..=170 |
             180..=188 | 200..=229 | 240..=245 | 250..=255 => unsafe {
                 Some(core::mem::transmute(val))
@@ -802,8 +809,12 @@ mod tests {
         assert_eq!(Opcode::from_u8(61), Some(Opcode::GetGlobal8));
         assert_eq!(Opcode::from_u8(66), Some(Opcode::SetGlobal16));
 
-        // Invalid opcode values should return None
-        assert_eq!(Opcode::from_u8(33), None);
+        // PushFunc8 and PushFunc are now valid opcodes
+        assert_eq!(Opcode::from_u8(33), Some(Opcode::PushFunc8));
+        assert_eq!(Opcode::from_u8(34), Some(Opcode::PushFunc));
+
+        // Invalid opcode values should return None (gaps in opcode numbering)
+        assert_eq!(Opcode::from_u8(35), None);
         assert_eq!(Opcode::from_u8(67), None);
     }
 
