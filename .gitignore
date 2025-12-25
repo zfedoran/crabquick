@@ -1,16 +1,20 @@
-# Rust
+# Rust build artifacts
 /target/
+**/target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
 
-# IDE
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
+*.sublime-*
+.project
+.classpath
+.settings/
 
 # Build artifacts
 *.o
@@ -18,14 +22,39 @@ Cargo.lock
 *.dylib
 *.dll
 *.a
+*.lib
+*.exe
 
-# Testing
+# Testing and fuzzing
 /fuzz/target/
 /fuzz/corpus/
+/fuzz/artifacts/
+*.profraw
+*.profdata
 
-# Documentation
+# Documentation build
 /target/doc/
 
 # Temporary files
 *.tmp
 *.temp
+*.bak
+*.orig
+
+# Debug files
+*.log
+*.dSYM/
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Claude Code
+.claude/
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
