@@ -194,6 +194,77 @@ pub fn array_concat(ctx: &mut Context, arr: JSValue, others: &[JSValue]) -> Resu
     array_constructor(ctx, &elements)
 }
 
+/// Array.prototype.splice() - Modifies array by removing and/or adding elements
+///
+/// Returns array of deleted elements
+pub fn array_splice(ctx: &mut Context, arr: JSValue, start: i32, delete_count: Option<i32>, items: &[JSValue]) -> Result<JSValue, JSValue> {
+    let idx = arr.to_ptr().ok_or(JSValue::exception())?;
+    let arr_ref = ctx.get_value_array(idx).ok_or(JSValue::exception())?;
+
+    let len = arr_ref.header().count() as i32;
+
+    // Normalize start index
+    let actual_start = if start < 0 {
+        (len + start).max(0)
+    } else {
+        start.min(len)
+    } as usize;
+
+    // Determine actual delete count
+    let actual_delete_count = if let Some(dc) = delete_count {
+        dc.max(0).min(len - actual_start as i32) as usize
+    } else {
+        (len - actual_start as i32) as usize
+    };
+
+    // Get mutable reference to perform operations
+    let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
+
+    // Collect deleted elements
+    let mut deleted = Vec::new();
+    unsafe {
+        let slice = arr_ref.as_full_mut_slice();
+        for i in 0..actual_delete_count {
+            deleted.push(slice[actual_start + i]);
+        }
+    }
+
+    // For simplicity, rebuild the array with the new elements
+    // In a production implementation, this would be done more efficiently
+    let mut new_elements = Vec::new();
+    unsafe {
+        let slice = arr_ref.as_slice();
+
+        // Add elements before start
+        new_elements.extend_from_slice(&slice[..actual_start]);
+
+        // Add new items
+        new_elements.extend_from_slice(items);
+
+        // Add elements after deleted section
+        if actual_start + actual_delete_count < slice.len() {
+            new_elements.extend_from_slice(&slice[actual_start + actual_delete_count..]);
+        }
+    }
+
+    // Clear and rebuild the array
+    let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
+    unsafe {
+        // Reset count to 0
+        arr_ref.header_mut().set_count(0);
+
+        // Push all new elements
+        for elem in new_elements {
+            if !arr_ref.push(elem) {
+                return Err(JSValue::exception());
+            }
+        }
+    }
+
+    // Return array of deleted elements
+    array_constructor(ctx, &deleted)
+}
+
 /// Array.prototype.reverse() - Reverses an array in place
 pub fn array_reverse(ctx: &mut Context, arr: JSValue) -> Result<JSValue, JSValue> {
     let idx = arr.to_ptr().ok_or(JSValue::exception())?;
@@ -394,5 +465,41 @@ mod tests {
         let slice = unsafe { arr_ref.as_slice() };
         assert_eq!(slice[0].to_int(), Some(3));
         assert_eq!(slice[2].to_int(), Some(1));
+    }
+
+    #[test]
+    fn test_array_splice() {
+        let mut ctx = Context::new(4096);
+
+        let arr = array_constructor(&mut ctx, &[
+            JSValue::from_int(1),
+            JSValue::from_int(2),
+            JSValue::from_int(3),
+            JSValue::from_int(4),
+        ]).unwrap();
+
+        // Splice out elements 1 and 2, insert 5 and 6
+        let deleted = array_splice(&mut ctx, arr, 1, Some(2), &[
+            JSValue::from_int(5),
+            JSValue::from_int(6),
+        ]).unwrap();
+
+        // Check deleted array
+        let del_idx = deleted.to_ptr().unwrap();
+        let del_arr = ctx.get_value_array(del_idx).unwrap();
+        assert_eq!(del_arr.header().count(), 2);
+        let del_slice = unsafe { del_arr.as_slice() };
+        assert_eq!(del_slice[0].to_int(), Some(2));
+        assert_eq!(del_slice[1].to_int(), Some(3));
+
+        // Check modified array
+        let idx = arr.to_ptr().unwrap();
+        let arr_ref = ctx.get_value_array(idx).unwrap();
+        assert_eq!(arr_ref.header().count(), 4);
+        let slice = unsafe { arr_ref.as_slice() };
+        assert_eq!(slice[0].to_int(), Some(1));
+        assert_eq!(slice[1].to_int(), Some(5));
+        assert_eq!(slice[2].to_int(), Some(6));
+        assert_eq!(slice[3].to_int(), Some(4));
     }
 }
