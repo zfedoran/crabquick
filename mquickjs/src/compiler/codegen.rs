@@ -121,25 +121,21 @@ impl CodeGenerator {
             scope: Scope::new(),
             loop_stack: Vec::new(),
             atom_table: BTreeMap::new(),
-            next_atom_id: 1, // Start at 1, reserve 0 for special use
+            atom_strings: Vec::new(),
         }
     }
 
     /// Gets or creates an atom for an identifier name
-    /// Uses the same hash function as the runtime to ensure atom IDs match
-    fn get_or_create_atom(&mut self, name: &str) -> u32 {
-        if let Some(&atom_id) = self.atom_table.get(name) {
-            return atom_id;
+    /// Returns a sequential index (0, 1, 2, ...) for each unique identifier
+    fn get_or_create_atom(&mut self, name: &str) -> u16 {
+        if let Some(&atom_idx) = self.atom_table.get(name) {
+            return atom_idx;
         }
 
-        // Use the same hash function as runtime/init.rs string_to_atom
-        let mut hash: u32 = 5381;
-        for byte in name.bytes() {
-            hash = hash.wrapping_mul(33).wrapping_add(byte as u32);
-        }
-
-        self.atom_table.insert(name.to_string(), hash);
-        hash
+        let atom_idx = self.atom_strings.len() as u16;
+        self.atom_strings.push(name.to_string());
+        self.atom_table.insert(name.to_string(), atom_idx);
+        atom_idx
     }
 
     /// Generates bytecode for a program
@@ -157,8 +153,10 @@ impl CodeGenerator {
             self.emit_simple(Opcode::ReturnUndef);
         }
 
-        // Serialize the constant pool and bytecode
-        // Format: [constant_count: u16][(type: u8, value: usize)...][ bytecode...]
+        // Serialize the constant pool, atom table, and bytecode
+        // Format: [constant_count: u16][(type: u8, value: usize)...]
+        //         [atom_count: u16][(len: u16, string_bytes)...]
+        //         [bytecode...]
         // Type: 0 = f64 bits, 1 = JSValue
         let mut result = Vec::new();
 
@@ -175,6 +173,18 @@ impl CodeGenerator {
                 result.push(if is_f64 { 0u8 } else { 1u8 });
                 result.extend_from_slice(&raw.to_le_bytes());
             }
+        }
+
+        // Write atom count
+        let atom_count = self.atom_strings.len() as u16;
+        result.extend_from_slice(&atom_count.to_le_bytes());
+
+        // Write atom strings
+        for atom_str in &self.atom_strings {
+            let bytes = atom_str.as_bytes();
+            let len = bytes.len() as u16;
+            result.extend_from_slice(&len.to_le_bytes());
+            result.extend_from_slice(bytes);
         }
 
         // Append the bytecode

@@ -1,6 +1,10 @@
 //! JavaScript function implementation
 
 use crate::value::JSValue;
+use crate::context::Context;
+
+/// Native function type
+pub type NativeFn = fn(&mut Context, JSValue, &[JSValue]) -> Result<JSValue, JSValue>;
 
 /// Function bytecode
 pub struct JSFunction {
@@ -104,23 +108,30 @@ impl Default for JSVarRef {
 
 /// C function data
 pub struct JSCFunction {
-    // TODO: Implement fields:
-    // - func_ptr: usize (index into C function table)
-    // - length: u16 (argument count)
-    _placeholder: u8,
+    /// Native function pointer
+    pub func_ptr: NativeFn,
+    /// Argument count (for Function.length)
+    pub length: u16,
 }
 
 impl JSCFunction {
     /// Creates a new C function
-    pub fn new() -> Self {
+    pub fn new(func_ptr: NativeFn, length: u16) -> Self {
         JSCFunction {
-            _placeholder: 0,
+            func_ptr,
+            length,
         }
+    }
+
+    /// Gets the function pointer
+    pub fn func_ptr(&self) -> NativeFn {
+        self.func_ptr
+    }
+
+    /// Gets the argument count
+    pub fn length(&self) -> u16 {
+        self.length
     }
 }
 
-impl Default for JSCFunction {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Note: No Default implementation for JSCFunction since it requires a function pointer

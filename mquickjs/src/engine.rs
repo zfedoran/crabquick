@@ -464,21 +464,29 @@ mod tests {
 
     #[test]
     fn test_eval_global_assignment() {
-        let mut engine = Engine::new(8192);
-        let result = engine.eval("x = 5; x").unwrap();
-        assert_eq!(engine.context.get_number(result), Some(5.0));
+        let mut engine = Engine::new(16384); // 16KB heap
+        let result = engine.eval("x = 5; x");
+        match result {
+            Ok(val) => {
+                assert_eq!(engine.context.get_number(val), Some(5.0));
+            }
+            Err(err) => {
+                let err_str = engine.value_to_string(err);
+                panic!("eval failed with error: {}", err_str);
+            }
+        }
     }
 
     #[test]
     fn test_eval_global_multiple() {
-        let mut engine = Engine::new(8192);
+        let mut engine = Engine::new(16384); // 16KB heap
         let result = engine.eval("a = 10; b = 20; a + b").unwrap();
         assert_eq!(engine.context.get_number(result), Some(30.0));
     }
 
     #[test]
     fn test_eval_global_persistence() {
-        let mut engine = Engine::new(8192);
+        let mut engine = Engine::new(16384); // 16KB heap
 
         // Set a global variable
         engine.eval("x = 42").unwrap();
@@ -495,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_eval_global_expression_sequence() {
-        let mut engine = Engine::new(8192);
+        let mut engine = Engine::new(16384); // 16KB heap
 
         // Test that global assignments work in expression sequences
         let result = engine.eval("y = 5; z = y * 2; z + 3").unwrap();

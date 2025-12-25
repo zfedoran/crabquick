@@ -583,8 +583,8 @@ impl Context {
         let props_index = {
             let obj: &crate::object::JSObject = unsafe { self.arena.get(obj_index) };
             if !obj.has_properties() {
-                // Create initial property table
-                let props_idx = self.alloc_property_table(16)?; // Start with reasonable capacity
+                // Create initial property table with enough capacity for global object + user vars
+                let props_idx = self.alloc_property_table(64)?; // 64 slots for global + user properties
                 let obj_mut: &mut crate::object::JSObject = unsafe { self.arena.get_mut(obj_index) };
                 obj_mut.set_props_index(props_idx);
                 props_idx
@@ -663,6 +663,8 @@ impl Context {
     /// Sets a property on the global object
     ///
     /// Creates the property if it doesn't exist, or updates it if it does.
+    /// Note: This is a simplified implementation that always adds properties.
+    /// Multiple properties with the same key may exist, but get_property will return the latest one.
     pub fn set_global_property(
         &mut self,
         key: crate::value::JSAtom,
@@ -672,16 +674,9 @@ impl Context {
             return Err(crate::memory::allocator::OutOfMemory);
         }
 
-        // Check if property already exists
-        if let Some(prop) = self.find_own_property(self.global_object, key) {
-            // Property exists - update it
-            // For now, we need to update the existing property's value
-            // This is a simplified version - we should update in place
-            // For the initial implementation, we'll add it again (which may not update correctly)
-            // TODO: Implement proper property update
-        }
-
-        // Add the property (or re-add if it existed)
+        // Simply add the property
+        // In a full implementation, we would check if it exists and update in place
+        // For now, get_property will return the most recent property with this key
         self.add_property(self.global_object, key, value, crate::object::PropertyFlags::default())
     }
 

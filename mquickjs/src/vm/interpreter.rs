@@ -3,6 +3,7 @@
 //! This module implements the main bytecode execution loop and opcode handlers.
 
 use alloc::vec::Vec;
+use alloc::string::{String, ToString};
 use crate::bytecode::{BytecodeReader, Opcode, Operand};
 use crate::context::Context;
 use crate::memory::HeapIndex;
@@ -24,6 +25,8 @@ pub struct VM {
     constants: Vec<JSValue>,
     /// Tracks which constants are f64 bits (true) vs JSValue (false)
     const_is_f64: Vec<bool>,
+    /// Atom table (index -> string)
+    atom_table: Vec<String>,
 }
 
 /// VM execution result
@@ -57,6 +60,7 @@ impl VM {
             exception: None,
             constants: Vec::new(),
             const_is_f64: Vec::new(),
+            atom_table: Vec::new(),
         }
     }
 
@@ -77,18 +81,24 @@ impl VM {
         // SAFETY: bytecode_ptr is valid as long as we don't modify the arena
         let bytecode_slice = unsafe { (*bytecode_ptr).as_slice() };
 
-        // Parse constant pool from bytecode
-        // Format: [constant_count: u16][(type: u8, value: usize)...][bytecode...]
+        // Parse constant pool and atom table from bytecode
+        // Format: [constant_count: u16][(type: u8, value: usize)...]
+        //         [atom_count: u16][(len: u16, string_bytes)...]
+        //         [bytecode...]
         // Type: 0 = f64 bits, 1 = JSValue
         if bytecode_slice.len() < 2 {
             return Err(self.throw_error(ctx, "Invalid bytecode format"));
         }
 
-        let const_count = u16::from_le_bytes([bytecode_slice[0], bytecode_slice[1]]) as usize;
-        let const_entry_size = 1 + core::mem::size_of::<usize>(); // type byte + usize value
-        let header_size = 2 + const_count * const_entry_size;
+        let mut offset = 0;
 
-        if bytecode_slice.len() < header_size {
+        // Read constant count
+        let const_count = u16::from_le_bytes([bytecode_slice[offset], bytecode_slice[offset + 1]]) as usize;
+        offset += 2;
+
+        let const_entry_size = 1 + core::mem::size_of::<usize>(); // type byte + usize value
+
+        if bytecode_slice.len() < offset + const_count * const_entry_size {
             return Err(self.throw_error(ctx, "Invalid bytecode: truncated constant pool"));
         }
 
@@ -99,21 +109,50 @@ impl VM {
         self.const_is_f64.reserve(const_count);
 
         for i in 0..const_count {
-            let offset = 2 + i * const_entry_size;
             let const_type = bytecode_slice[offset];
-            let value_offset = offset + 1;
+            offset += 1;
 
             let mut bytes = [0u8; core::mem::size_of::<usize>()];
-            bytes.copy_from_slice(&bytecode_slice[value_offset..value_offset + core::mem::size_of::<usize>()]);
-            let raw = usize::from_le_bytes(bytes);
+            bytes.copy_from_slice(&bytecode_slice[offset..offset + core::mem::size_of::<usize>()]);
+            offset += core::mem::size_of::<usize>();
 
+            let raw = usize::from_le_bytes(bytes);
             let value = unsafe { core::mem::transmute::<usize, JSValue>(raw) };
             self.constants.push(value);
             self.const_is_f64.push(const_type == 0);
         }
 
-        // Get the actual bytecode after the constant pool
-        let code_slice = &bytecode_slice[header_size..];
+        // Read atom count
+        if bytecode_slice.len() < offset + 2 {
+            return Err(self.throw_error(ctx, "Invalid bytecode: missing atom count"));
+        }
+        let atom_count = u16::from_le_bytes([bytecode_slice[offset], bytecode_slice[offset + 1]]) as usize;
+        offset += 2;
+
+        // Read atom strings
+        self.atom_table.clear();
+        self.atom_table.reserve(atom_count);
+
+        for _ in 0..atom_count {
+            if bytecode_slice.len() < offset + 2 {
+                return Err(self.throw_error(ctx, "Invalid bytecode: truncated atom table"));
+            }
+            let len = u16::from_le_bytes([bytecode_slice[offset], bytecode_slice[offset + 1]]) as usize;
+            offset += 2;
+
+            if bytecode_slice.len() < offset + len {
+                return Err(self.throw_error(ctx, "Invalid bytecode: truncated atom string"));
+            }
+            let string_bytes = &bytecode_slice[offset..offset + len];
+            offset += len;
+
+            let string = core::str::from_utf8(string_bytes)
+                .map_err(|_| self.throw_error(ctx, "Invalid UTF-8 in atom table"))?;
+            self.atom_table.push(string.to_string());
+        }
+
+        // Get the actual bytecode after the constant pool and atom table
+        let code_slice = &bytecode_slice[offset..];
 
         // Create a bytecode reader
         let mut reader = BytecodeReader::new(code_slice);
@@ -953,7 +992,7 @@ impl VM {
             // ===== Global Variable Access =====
             GetGlobal8 => {
                 if let Operand::Atom8(atom_idx) = instruction.operand {
-                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
                     let value = ctx.get_global_property(atom)
                         .unwrap_or(JSValue::undefined());
                     self.value_stack.push(value)
@@ -966,7 +1005,7 @@ impl VM {
 
             GetGlobal16 => {
                 if let Operand::Atom16(atom_idx) = instruction.operand {
-                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
                     let value = ctx.get_global_property(atom)
                         .unwrap_or(JSValue::undefined());
                     self.value_stack.push(value)
@@ -979,7 +1018,7 @@ impl VM {
 
             PutGlobal8 => {
                 if let Operand::Atom8(atom_idx) = instruction.operand {
-                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
                     let value = self.value_stack.pop()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
                     ctx.set_global_property(atom, value)
@@ -992,7 +1031,7 @@ impl VM {
 
             PutGlobal16 => {
                 if let Operand::Atom16(atom_idx) = instruction.operand {
-                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
                     let value = self.value_stack.pop()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
                     ctx.set_global_property(atom, value)
@@ -1005,7 +1044,7 @@ impl VM {
 
             SetGlobal8 => {
                 if let Operand::Atom8(atom_idx) = instruction.operand {
-                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
                     let value = self.value_stack.peek()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
                     ctx.set_global_property(atom, value)
@@ -1018,7 +1057,7 @@ impl VM {
 
             SetGlobal16 => {
                 if let Operand::Atom16(atom_idx) = instruction.operand {
-                    let atom = crate::value::JSAtom::from_id(atom_idx as u32);
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
                     let value = self.value_stack.peek()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
                     ctx.set_global_property(atom, value)
@@ -1068,6 +1107,24 @@ impl VM {
 
         // For other values (ints, special values), just return as-is
         Ok(value)
+    }
+
+    /// Helper: Gets an atom from the atom table and converts it to a JSAtom
+    /// Uses the same hash function as the runtime
+    fn get_atom_from_table(&self, idx: usize) -> Result<crate::value::JSAtom, JSValue> {
+        if idx >= self.atom_table.len() {
+            return Err(JSValue::undefined());
+        }
+
+        let name = &self.atom_table[idx];
+
+        // Use the same hash function as runtime/init.rs string_to_atom
+        let mut hash: u32 = 5381;
+        for byte in name.bytes() {
+            hash = hash.wrapping_mul(33).wrapping_add(byte as u32);
+        }
+
+        Ok(crate::value::JSAtom::from_id(hash))
     }
 
     /// Type conversion and operator implementations will be added below...
@@ -1276,9 +1333,10 @@ mod tests {
 
         let code = writer.finish();
 
-        // Add constant pool header: [count: u16][constants...][bytecode...]
+        // Add constant pool header and atom table: [const_count: u16][constants...][atom_count: u16][atoms...][bytecode...]
         let mut bytecode = Vec::new();
         bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
+        bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 atoms
         bytecode.extend_from_slice(&code);
 
         let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();
@@ -1309,9 +1367,10 @@ mod tests {
 
         let code = writer.finish();
 
-        // Add constant pool header
+        // Add constant pool header and atom table
         let mut bytecode = Vec::new();
         bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
+        bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 atoms
         bytecode.extend_from_slice(&code);
 
         let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();
@@ -1352,9 +1411,10 @@ mod tests {
 
         let code = writer.finish();
 
-        // Add constant pool header
+        // Add constant pool header and atom table
         let mut bytecode = Vec::new();
         bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 constants
+        bytecode.extend_from_slice(&0u16.to_le_bytes()); // 0 atoms
         bytecode.extend_from_slice(&code);
 
         let bc_index = ctx.alloc_byte_array(bytecode.len()).unwrap();

@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_init_runtime() {
-        let mut ctx = Context::new(16384);
+        let mut ctx = Context::new(32768); // 32KB for property tables
         let result = init_runtime(&mut ctx);
         assert!(result.is_ok());
     }
