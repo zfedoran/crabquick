@@ -9,7 +9,24 @@ A native Rust implementation of a minimal JavaScript engine designed for extreme
 
 CrabQuick is a from-scratch port of [MicroQuickJS](https://github.com/bellard/mquickjs) from C to idiomatic Rust. It maintains the minimal resource footprint (10-12 kB RAM minimum) while leveraging Rust's safety guarantees.
 
-**Status:** Active Development - Core engine functional with 284+ passing tests
+-----------------------------
+**Status:** Active Development
+
+Core engine functional with 284+ passing tests
+
+  1. JS function calls don't fully work - The VM can execute native functions but calling user-defined JS functions (closures, recursion) is incomplete
+  2. No real eval benchmarks - We can't benchmark fib(30) or similar because function calls are stubbed
+  3. Type coercion is missing - "5" + 3 doesn't work properly yet
+
+The low-level operations (memory allocation, value encoding) are likely comparable to C, but the end-to-end JS execution isn't complete enough to measure.
+
+Summary
+
+The engine is ~60-70% complete:
+  - Core architecture is solid and tested
+  - Simple expressions and Math functions work
+  - Missing: full function calls, built-in methods, type coercion
+-----------------------------
 
 ### Key Features
 
