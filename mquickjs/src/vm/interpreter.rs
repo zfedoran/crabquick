@@ -1115,8 +1115,8 @@ mod tests {
         }
 
         let result = vm.execute(&mut ctx, bc_index).unwrap();
-        // Result should be 5.0 (boxed number)
-        assert!(result.is_ptr());
+        // Result should be 5 (inlined integer since it fits in i31)
+        assert_eq!(result.to_int(), Some(5));
     }
 
     #[test]
@@ -1150,13 +1150,21 @@ mod tests {
         let mut vm = VM::new();
         let mut ctx = Context::new(4096);
 
-        // Test: push false, if_false +8, push 1, goto +4, push 2, return
-        // Should skip push 1 and execute push 2
+        // Bytecode layout (labels are i32, so 4 bytes each):
+        // offset 0: PushFalse (1 byte)
+        // offset 1: IfFalse (1 opcode + 4 bytes label = 5 bytes), PC after = 6
+        // offset 6: Push1 (1 byte)
+        // offset 7: Goto (1 opcode + 4 bytes = 5 bytes), PC after = 12
+        // offset 12: Push2 (1 byte)
+        // offset 13: Return (1 byte)
+        //
+        // Test: push false, if_false to Push2, push 1, goto to Return, push 2, return
+        // When false: skip Push1+Goto, execute Push2 -> return 2
         let mut writer = BytecodeWriter::new();
         writer.emit(&Instruction::new(Opcode::PushFalse));
-        writer.emit(&Instruction::with_label(Opcode::IfFalse, 8)); // Skip 8 bytes
+        writer.emit(&Instruction::with_label(Opcode::IfFalse, 6)); // Jump from PC=6 to PC=12 (Push2)
         writer.emit(&Instruction::new(Opcode::Push1));
-        writer.emit(&Instruction::with_label(Opcode::Goto, 4)); // Skip 4 bytes
+        writer.emit(&Instruction::with_label(Opcode::Goto, 1)); // Jump from PC=12 to PC=13 (Return)
         writer.emit(&Instruction::new(Opcode::Push2));
         writer.emit(&Instruction::new(Opcode::Return));
 

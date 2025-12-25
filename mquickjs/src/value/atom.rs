@@ -355,11 +355,13 @@ mod tests {
             table.add_ref(atom);
             assert_eq!(table.entries[atom.id() as usize].ref_count, 2);
 
-            // Remove ref
-            assert!(!table.remove_ref(atom)); // Still has refs
-            assert!(!table.remove_ref(atom)); // Now zero
+            // Remove ref - still has refs (count goes to 1)
+            assert!(!table.remove_ref(atom));
+            assert_eq!(table.entries[atom.id() as usize].ref_count, 1);
 
-            assert!(table.remove_ref(atom)); // Returns true when zero
+            // Remove ref - returns true when count reaches zero
+            assert!(table.remove_ref(atom));
+            assert_eq!(table.entries[atom.id() as usize].ref_count, 0);
         }
     }
 

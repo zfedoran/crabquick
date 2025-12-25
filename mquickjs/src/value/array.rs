@@ -233,7 +233,8 @@ impl JSValueArray {
             return false;
         }
 
-        let slice = self.as_mut_slice();
+        // Use full slice since we need to access index count (beyond current count)
+        let slice = self.as_full_mut_slice();
 
         // Shift all elements up by one
         for i in (0..count).rev() {
@@ -241,8 +242,7 @@ impl JSValueArray {
         }
 
         // Insert new element at the beginning
-        let full_slice = self.as_full_mut_slice();
-        full_slice[0] = value;
+        slice[0] = value;
 
         self.header.set_count(count + 1);
         true

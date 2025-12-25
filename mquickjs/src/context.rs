@@ -579,7 +579,7 @@ impl Context {
             let obj: &crate::object::JSObject = unsafe { self.arena.get(obj_index) };
             if !obj.has_properties() {
                 // Create initial property table
-                let props_idx = self.alloc_property_table(4)?; // Start with small capacity
+                let props_idx = self.alloc_property_table(16)?; // Start with reasonable capacity
                 let obj_mut: &mut crate::object::JSObject = unsafe { self.arena.get_mut(obj_index) };
                 obj_mut.set_props_index(props_idx);
                 props_idx

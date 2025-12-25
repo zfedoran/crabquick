@@ -14,7 +14,9 @@ use alloc::string::String;
 ///
 /// Creates a new array with optional initial elements
 pub fn array_constructor(ctx: &mut Context, elements: &[JSValue]) -> Result<JSValue, JSValue> {
-    let arr_idx = ctx.alloc_value_array(elements.len())
+    // Allocate at least 8 elements for growable arrays
+    let capacity = elements.len().max(8);
+    let arr_idx = ctx.alloc_value_array(capacity)
         .map_err(|_| JSValue::exception())?;
 
     if let Some(arr) = ctx.get_value_array_mut(arr_idx) {
