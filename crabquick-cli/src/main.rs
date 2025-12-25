@@ -1,16 +1,16 @@
-//! MicroQuickJS command-line interface
+//! CrabQuick command-line interface
 
-use mquickjs::Context;
+use crabquick::Context;
 
 fn main() {
-    println!("MicroQuickJS v{}", env!("CARGO_PKG_VERSION"));
+    println!("CrabQuick v{}", env!("CARGO_PKG_VERSION"));
 
     // Parse command-line arguments
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 {
-        println!("Usage: mqjs [options] <script.js>");
-        println!("       mqjs --repl");
+        println!("Usage: crabquick [options] <script.js>");
+        println!("       crabquick --repl");
         std::process::exit(1);
     }
 

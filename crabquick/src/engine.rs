@@ -30,7 +30,7 @@ pub struct MemoryStats {
 /// # Example
 ///
 /// ```rust,ignore
-/// use mquickjs::Engine;
+/// use crabquick::Engine;
 ///
 /// let mut engine = Engine::new(65536); // 64 KB heap
 /// let result = engine.eval("2 + 3").unwrap();

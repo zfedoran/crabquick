@@ -48,7 +48,7 @@ impl From<CodeGenError> for CompileError {
 /// # Example
 ///
 /// ```ignore
-/// use mquickjs::compiler::compile;
+/// use crabquick::compiler::compile;
 ///
 /// let bytecode = compile("2 + 3")?;
 /// ```

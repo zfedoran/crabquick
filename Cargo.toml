@@ -1,18 +1,18 @@
 [workspace]
 resolver = "2"
 members = [
-    "mquickjs",
-    "mquickjs-build",
-    "mqjs",
+    "crabquick",
+    "crabquick-build",
+    "crabquick-cli",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["MicroQuickJS Rust Contributors"]
+authors = ["CrabQuick Contributors"]
 license = "MIT"
-repository = "https://github.com/yourusername/rustmicroquickjs"
-homepage = "https://github.com/yourusername/rustmicroquickjs"
+repository = "https://github.com/user/crabquick"
+homepage = "https://github.com/user/crabquick"
 
 [workspace.dependencies]
 # Shared dev dependencies

@@ -130,6 +130,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabquick"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "libm",
+ "proptest",
+]
+
+[[package]]
+name = "crabquick-build"
+version = "0.1.0"
+dependencies = [
+ "crabquick",
+]
+
+[[package]]
+name = "crabquick-cli"
+version = "0.1.0"
+dependencies = [
+ "crabquick",
+ "rustyline",
+]
+
+[[package]]
 name = "criterion"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -350,30 +374,6 @@ name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
-
-[[package]]
-name = "mqjs"
-version = "0.1.0"
-dependencies = [
- "mquickjs",
- "rustyline",
-]
-
-[[package]]
-name = "mquickjs"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "libm",
- "proptest",
-]
-
-[[package]]
-name = "mquickjs-build"
-version = "0.1.0"
-dependencies = [
- "mquickjs",
-]
 
 [[package]]
 name = "nibble_vec"
@@ -1004,6 +1004,6 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1dccf46b25b205e4bebe1d5258a991df1cc17801017a845cb5b3fe0269781aa"
+checksum = "d0095ecd462946aa3927d9297b63ef82fb9a5316d7a37d134eeb36e58228615a"

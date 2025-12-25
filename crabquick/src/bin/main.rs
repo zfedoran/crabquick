@@ -1,16 +1,16 @@
-//! MicroQuickJS command-line interface
+//! CrabQuick command-line interface
 //!
-//! A simple CLI for running JavaScript files with the MicroQuickJS engine.
+//! A simple CLI for running JavaScript files with the CrabQuick engine.
 //!
 //! Usage:
-//!   mquickjs <file.js>              - Execute a JavaScript file
-//!   mquickjs -e "<code>"            - Execute JavaScript code directly
-//!   mquickjs --help                 - Show help message
+//!   crabquick <file.js>              - Execute a JavaScript file
+//!   crabquick -e "<code>"            - Execute JavaScript code directly
+//!   crabquick --help                 - Show help message
 
 use std::env;
 use std::fs;
 use std::process;
-use mquickjs::Engine;
+use crabquick::Engine;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -50,35 +50,35 @@ fn main() {
 }
 
 fn print_usage() {
-    eprintln!("Usage: mquickjs <file.js>");
-    eprintln!("       mquickjs -e \"<code>\"");
-    eprintln!("       mquickjs --help");
+    eprintln!("Usage: crabquick <file.js>");
+    eprintln!("       crabquick -e \"<code>\"");
+    eprintln!("       crabquick --help");
 }
 
 fn print_help() {
-    println!("MicroQuickJS - A Minimal JavaScript Engine");
+    println!("CrabQuick - A Minimal JavaScript Engine");
     println!();
     println!("Usage:");
-    println!("  mquickjs <file.js>         Execute a JavaScript file");
-    println!("  mquickjs -e \"<code>\"       Execute JavaScript code directly");
-    println!("  mquickjs -m <file.js>      Execute with memory statistics");
-    println!("  mquickjs --help            Show this help message");
-    println!("  mquickjs --version         Show version information");
+    println!("  crabquick <file.js>         Execute a JavaScript file");
+    println!("  crabquick -e \"<code>\"       Execute JavaScript code directly");
+    println!("  crabquick -m <file.js>      Execute with memory statistics");
+    println!("  crabquick --help            Show this help message");
+    println!("  crabquick --version         Show version information");
     println!();
     println!("Examples:");
-    println!("  mquickjs hello.js");
-    println!("  mquickjs -e \"console.log('Hello, World!')\"");
-    println!("  mquickjs -m fibonacci.js");
+    println!("  crabquick hello.js");
+    println!("  crabquick -e \"console.log('Hello, World!')\"");
+    println!("  crabquick -m fibonacci.js");
 }
 
 fn print_version() {
-    println!("MicroQuickJS v0.1.0");
+    println!("CrabQuick v0.1.0");
     println!("A native Rust implementation of a minimal JavaScript engine");
 }
 
 fn execute_code(engine: &mut Engine, source: &str) {
     match engine.eval(source) {
-        Ok(result) => {
+        Ok(_result) => {
             // Print result if not undefined
             let result_str = engine.eval_as_string("result").unwrap_or_default();
             if result_str != "undefined" {

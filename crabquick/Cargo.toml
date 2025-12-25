@@ -1,5 +1,5 @@
 [package]
-name = "mquickjs"
+name = "crabquick"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -20,10 +20,6 @@ libm = "0.2"
 [dev-dependencies]
 proptest.workspace = true
 criterion.workspace = true
-
-[[bin]]
-name = "mquickjs"
-path = "src/bin/mquickjs.rs"
 
 [[bench]]
 name = "benchmarks"

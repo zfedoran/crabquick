@@ -1,14 +1,14 @@
-//! # MicroQuickJS - A Minimal JavaScript Engine in Rust
+//! # CrabQuick - A Minimal JavaScript Engine in Rust
 //!
-//! This is a native Rust port of MicroQuickJS, designed to run JavaScript
+//! CrabQuick is a native Rust port of MicroQuickJS, designed to run JavaScript
 //! in extremely constrained environments (minimum 10-12 kB RAM).
 //!
 //! ## Architecture
 //!
 //! The engine is organized into several major subsystems:
 //!
-//! - **Memory Management**: Custom bump allocator with mark-and-compact GC
-//! - **Value System**: Tagged union representation for JavaScript values
+//! - **Memory Management**: Custom bump allocator with index-based GC
+//! - **Value System**: NaN-boxed tagged value representation
 //! - **Object System**: Property hash tables and prototype chains
 //! - **Bytecode**: Instruction format and constant pools
 //! - **Compiler**: Lexer, parser, and code generator
@@ -19,7 +19,7 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use mquickjs::Context;
+//! use crabquick::Context;
 //!
 //! let mut ctx = Context::new(8192);
 //! let result = ctx.eval("2 + 2", "script.js", 0)?;

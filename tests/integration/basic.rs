@@ -1,6 +1,6 @@
 //! Basic integration tests
 
-use mquickjs::{Context, JSValue};
+use crabquick::{Context, JSValue};
 
 #[test]
 fn test_context_creation() {
@@ -51,8 +51,8 @@ fn test_gc_basic() {
 
     // Allocate some memory
     unsafe {
-        let _ = ctx.alloc_raw(64, mquickjs::memory::MemTag::Object).unwrap();
-        let _ = ctx.alloc_raw(128, mquickjs::memory::MemTag::String).unwrap();
+        let _ = ctx.alloc_raw(64, crabquick::memory::MemTag::Object).unwrap();
+        let _ = ctx.alloc_raw(128, crabquick::memory::MemTag::String).unwrap();
     }
 
     let usage_before = ctx.memory_usage();
@@ -68,13 +68,13 @@ fn test_gc_basic() {
 
 #[test]
 fn test_gc_roots() {
-    use mquickjs::memory::HeapIndex;
+    use crabquick::memory::HeapIndex;
 
     let mut ctx = Context::new(8192);
 
     // Allocate and root an object
     let idx = unsafe {
-        ctx.alloc_raw(64, mquickjs::memory::MemTag::Object).unwrap()
+        ctx.alloc_raw(64, crabquick::memory::MemTag::Object).unwrap()
     };
 
     let val = JSValue::from_ptr(idx);
@@ -89,12 +89,12 @@ fn test_gc_roots() {
 
 #[test]
 fn test_value_ptr_roundtrip() {
-    use mquickjs::memory::HeapIndex;
+    use crabquick::memory::HeapIndex;
 
     let mut ctx = Context::new(8192);
 
     let idx = unsafe {
-        ctx.alloc_raw(64, mquickjs::memory::MemTag::Object).unwrap()
+        ctx.alloc_raw(64, crabquick::memory::MemTag::Object).unwrap()
     };
 
     let val = JSValue::from_ptr(idx);

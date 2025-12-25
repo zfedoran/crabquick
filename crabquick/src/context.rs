@@ -15,7 +15,7 @@ use crate::value::{JSValue, AtomTable};
 /// # Example
 ///
 /// ```rust,ignore
-/// use mquickjs::Context;
+/// use crabquick::Context;
 ///
 /// let mut ctx = Context::new(8192);
 /// let result = ctx.eval("1 + 1", "script.js", 0)?;

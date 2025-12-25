@@ -5,13 +5,13 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use mquickjs::{
+use crabquick::{
     Context,
     bytecode::{BytecodeWriter, Instruction, Opcode},
 };
 
 /// Helper function to execute bytecode
-fn execute_bytecode(ctx: &mut Context, instructions: &[Instruction]) -> Result<mquickjs::JSValue, mquickjs::JSValue> {
+fn execute_bytecode(ctx: &mut Context, instructions: &[Instruction]) -> Result<crabquick::JSValue, crabquick::JSValue> {
     // Build bytecode
     let mut writer = BytecodeWriter::new();
     for inst in instructions {

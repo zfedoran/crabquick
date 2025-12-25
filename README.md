@@ -37,9 +37,9 @@ The engine consists of several major subsystems:
 
 This is a Cargo workspace with three crates:
 
-- **mquickjs** - Core JavaScript engine library (zero dependencies)
-- **mquickjs-build** - Build-time compiler for ROM-resident standard library
-- **mqjs** - Command-line REPL and script executor
+- **crabquick** - Core JavaScript engine library (zero dependencies)
+- **crabquick-build** - Build-time compiler for ROM-resident standard library
+- **crabquick-cli** - Command-line REPL and script executor
 
 ## Building
 
@@ -65,7 +65,7 @@ cargo fmt
 ### As a Library
 
 ```rust
-use mquickjs::Engine;
+use crabquick::Engine;
 
 fn main() {
     // Create an engine with 64 KB heap
@@ -91,16 +91,16 @@ fn main() {
 
 ```bash
 # Run a JavaScript file
-mqjs examples/hello.js
+crabquick examples/hello.js
 
 # Execute code directly
-mqjs -e "console.log('Hello, World!')"
+crabquick -e "console.log('Hello, World!')"
 
 # Run with memory statistics
-mqjs -m examples/fibonacci.js
+crabquick -m examples/fibonacci.js
 
 # Show help
-mqjs --help
+crabquick --help
 ```
 
 ## Development Status
@@ -139,8 +139,8 @@ cargo test test_name
 
 Key architectural decisions are documented in the [notes/](notes/) directory:
 
-- [Architecture Overview](notes/architecture.md)
-- [Memory Management](notes/memory-management.md)
+- [Architecture Overview](notes/design/architecture.md)
+- [Memory Management](notes/design/memory-management.md)
 - [Implementation Plan](notes/implementation-plan.md)
 
 ## Safety Strategy
@@ -180,5 +180,5 @@ MIT License - See [LICENSE](LICENSE) for details.
 See the [examples/](examples/) directory for sample JavaScript programs.
 
 ```bash
-cargo run --package mqjs -- examples/hello.js
+cargo run --package crabquick-cli -- examples/hello.js
 ```

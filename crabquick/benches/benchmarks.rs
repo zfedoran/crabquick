@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use mquickjs::Context;
+use crabquick::Context;
 
 fn bench_context_creation(c: &mut Criterion) {
     c.bench_function("context_new_8kb", |b| {
@@ -8,7 +8,7 @@ fn bench_context_creation(c: &mut Criterion) {
 }
 
 fn bench_value_operations(c: &mut Criterion) {
-    use mquickjs::JSValue;
+    use crabquick::JSValue;
 
     c.bench_function("value_int_encoding", |b| {
         b.iter(|| {

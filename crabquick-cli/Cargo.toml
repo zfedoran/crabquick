@@ -1,19 +1,19 @@
 [package]
-name = "mqjs"
+name = "crabquick-cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Command-line REPL for MicroQuickJS"
+description = "Command-line REPL for CrabQuick JavaScript engine"
 
 [[bin]]
-name = "mqjs"
+name = "crabquick"
 path = "src/main.rs"
 
 [dependencies]
-mquickjs = { path = "../mquickjs" }
+crabquick = { path = "../crabquick" }
 rustyline = { version = "13.0", optional = true }
 
 [features]

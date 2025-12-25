@@ -5,7 +5,7 @@
 
 #![cfg(test)]
 
-use mquickjs::{Engine, JSValue};
+use crabquick::{Engine, JSValue};
 
 /// Run a JavaScript snippet and return the result as a string
 pub fn run_js(source: &str) -> Result<String, String> {

@@ -1,12 +1,12 @@
 [package]
-name = "mquickjs-build"
+name = "crabquick-build"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Build-time stdlib compiler for MicroQuickJS"
+description = "Build-time stdlib compiler for CrabQuick"
 
 [dependencies]
-mquickjs = { path = "../mquickjs" }
+crabquick = { path = "../crabquick" }
