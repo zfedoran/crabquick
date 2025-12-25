@@ -1005,4 +1005,171 @@ mod tests {
             assert_eq!(value, Some(JSValue::from_int(i as i32 * 10)));
         }
     }
+
+    #[test]
+    fn test_gc_compaction_frees_memory() {
+        let mut ctx = Context::new(4096);
+
+        // Allocate objects without rooting them - they should be collected
+        for _ in 0..10 {
+            let _ = ctx.new_object().unwrap();
+            let _ = ctx.new_string("temporary string").unwrap();
+        }
+
+        let usage_before = ctx.memory_usage();
+        assert!(usage_before > 0, "Should have allocated some memory");
+
+        // Run GC - all objects should be collected since they're not rooted
+        ctx.gc();
+
+        let usage_after = ctx.memory_usage();
+
+        // Memory should be freed (should be 0 or very close to 0)
+        assert!(
+            usage_after < usage_before,
+            "GC should free memory: before={}, after={}",
+            usage_before,
+            usage_after
+        );
+        assert_eq!(
+            usage_after, 0,
+            "All unreachable objects should be collected, usage={}",
+            usage_after
+        );
+    }
+
+    #[test]
+    fn test_gc_preserves_rooted_objects() {
+        let mut ctx = Context::new(4096);
+
+        // Allocate and root some objects
+        let obj1 = ctx.new_object().unwrap();
+        let obj2 = ctx.new_object().unwrap();
+        let str1 = ctx.new_string("rooted string").unwrap();
+
+        ctx.add_root(obj1);
+        ctx.add_root(obj2);
+        ctx.add_root(str1);
+
+        // Allocate some garbage objects
+        for _ in 0..5 {
+            let _ = ctx.new_object().unwrap();
+            let _ = ctx.new_string("garbage").unwrap();
+        }
+
+        let usage_before = ctx.memory_usage();
+
+        // Run GC
+        ctx.gc();
+
+        let usage_after = ctx.memory_usage();
+
+        // Some memory should be freed (the garbage objects)
+        assert!(
+            usage_after < usage_before,
+            "GC should free garbage: before={}, after={}",
+            usage_before,
+            usage_after
+        );
+
+        // But rooted objects should still be accessible
+        assert!(ctx.get_object(obj1).is_some());
+        assert!(ctx.get_object(obj2).is_some());
+        assert_eq!(ctx.get_string(str1), Some("rooted string"));
+
+        // Clean up roots
+        ctx.remove_root(obj1);
+        ctx.remove_root(obj2);
+        ctx.remove_root(str1);
+
+        // Now everything should be collectable
+        ctx.gc();
+        assert_eq!(ctx.memory_usage(), 0);
+    }
+
+    #[test]
+    fn test_gc_compaction_moves_objects() {
+        let mut ctx = Context::new(8192);
+
+        // Create some objects with gaps
+        let obj1 = ctx.new_object().unwrap();
+        ctx.add_root(obj1);
+
+        let _garbage1 = ctx.new_object().unwrap(); // Will be collected
+
+        let obj2 = ctx.new_object().unwrap();
+        ctx.add_root(obj2);
+
+        let _garbage2 = ctx.new_object().unwrap(); // Will be collected
+
+        let obj3 = ctx.new_object().unwrap();
+        ctx.add_root(obj3);
+
+        let usage_before = ctx.memory_usage();
+
+        // Run GC - should compact memory
+        ctx.gc();
+
+        let usage_after = ctx.memory_usage();
+
+        // Memory should be compacted
+        assert!(
+            usage_after < usage_before,
+            "GC should compact: before={}, after={}",
+            usage_before,
+            usage_after
+        );
+
+        // All rooted objects should still be accessible
+        assert!(ctx.get_object(obj1).is_some());
+        assert!(ctx.get_object(obj2).is_some());
+        assert!(ctx.get_object(obj3).is_some());
+
+        // Clean up
+        ctx.remove_root(obj1);
+        ctx.remove_root(obj2);
+        ctx.remove_root(obj3);
+    }
+
+    #[test]
+    fn test_gc_with_object_references() {
+        use crate::object::PropertyFlags;
+        use crate::value::JSAtom;
+
+        let mut ctx = Context::new(8192);
+
+        // Create an object graph: obj1 -> obj2 -> obj3
+        let obj3 = ctx.new_object().unwrap();
+        let obj2 = ctx.new_object().unwrap();
+        let obj1 = ctx.new_object().unwrap();
+
+        // Link them together
+        let key = JSAtom::from_id(1);
+        ctx.add_property(obj1, key, obj2, PropertyFlags::default())
+            .unwrap();
+        ctx.add_property(obj2, key, obj3, PropertyFlags::default())
+            .unwrap();
+
+        // Only root obj1 - obj2 and obj3 should be kept alive through the reference
+        ctx.add_root(obj1);
+
+        // Allocate some garbage
+        for _ in 0..5 {
+            let _ = ctx.new_object().unwrap();
+        }
+
+        // Run GC
+        ctx.gc();
+
+        // All objects in the chain should still be accessible
+        assert!(ctx.get_object(obj1).is_some());
+        assert!(ctx.get_object(obj2).is_some());
+        assert!(ctx.get_object(obj3).is_some());
+
+        // Verify the links are still intact
+        assert_eq!(ctx.get_property(obj1, key), Some(obj2));
+        assert_eq!(ctx.get_property(obj2, key), Some(obj3));
+
+        ctx.remove_root(obj1);
+    }
 }

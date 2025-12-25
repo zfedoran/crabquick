@@ -9,9 +9,10 @@ use core::mem;
 
 /// Heap index for stable references to allocated objects
 ///
-/// HeapIndex represents an offset into the arena's memory.
-/// Indices remain stable across garbage collection (they get updated
-/// during compaction via a forwarding table).
+/// HeapIndex is now a stable index into the Arena's index table,
+/// not a direct memory offset. This allows the GC to move objects
+/// during compaction by updating the index table rather than
+/// threading pointers through all objects.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HeapIndex(pub u32);
 
@@ -27,20 +28,32 @@ impl HeapIndex {
         self.0 == u32::MAX
     }
 
-    /// Returns the raw offset value
+    /// Returns the raw index value (index into the index table)
     #[inline]
     pub const fn as_usize(self) -> usize {
         self.0 as usize
     }
 
-    /// Creates a HeapIndex from a raw offset
+    /// Creates a HeapIndex from a raw index value
     #[inline]
-    pub const fn from_usize(offset: usize) -> Self {
-        HeapIndex(offset as u32)
+    pub const fn from_usize(index: usize) -> Self {
+        HeapIndex(index as u32)
+    }
+
+    /// Creates a HeapIndex from a raw u32 value
+    #[inline]
+    pub const fn from_raw(index: u32) -> Self {
+        HeapIndex(index)
+    }
+
+    /// Returns the raw u32 value
+    #[inline]
+    pub const fn as_raw(self) -> u32 {
+        self.0
     }
 }
 
-/// Memory arena with bump allocator
+/// Memory arena with bump allocator and index table for GC
 ///
 /// Layout:
 /// ```text
@@ -49,6 +62,10 @@ impl HeapIndex {
 ///
 /// The heap grows upward from offset 0, and the stack (if used) would grow
 /// downward from the top. Currently stack is not implemented but space is reserved.
+///
+/// The index table maps HeapIndex values to memory offsets. During GC compaction,
+/// objects can be moved in memory, and only the index table needs to be updated
+/// rather than threading pointers through all objects.
 pub struct Arena {
     /// Backing memory for the arena
     memory: Vec<u8>,
@@ -56,6 +73,11 @@ pub struct Arena {
     heap_free: usize,
     /// Bottom of stack space (grows downward from arena end)
     stack_bottom: usize,
+    /// Index table: maps HeapIndex -> memory offset
+    /// None means the index slot is free/dead
+    index_table: Vec<Option<usize>>,
+    /// Free indices that can be reused
+    free_indices: Vec<u32>,
 }
 
 /// 8-byte alignment for all allocations
@@ -78,6 +100,8 @@ impl Arena {
             memory,
             heap_free: 0,
             stack_bottom: size,
+            index_table: Vec::new(),
+            free_indices: Vec::new(),
         }
     }
 
@@ -94,7 +118,7 @@ impl Arena {
     ///
     /// # Safety
     ///
-    /// The returned HeapIndex is valid until the next GC compaction.
+    /// The returned HeapIndex remains stable across GC compactions.
     pub fn alloc(&mut self, size: usize, mtag: MemTag) -> Result<HeapIndex, OutOfMemory> {
         // Calculate total size: header + data, aligned to 8 bytes
         let header_size = mem::size_of::<MemBlockHeader>();
@@ -105,12 +129,12 @@ impl Arena {
             return Err(OutOfMemory);
         }
 
-        // Store the allocation offset
-        let index = HeapIndex::from_usize(self.heap_free);
+        // Store the memory offset
+        let offset = self.heap_free;
 
         // SAFETY: We checked bounds above, and heap_free is always valid
         unsafe {
-            let ptr = self.memory.as_mut_ptr().add(self.heap_free);
+            let ptr = self.memory.as_mut_ptr().add(offset);
             let header_ptr = ptr as *mut MemBlockHeader;
 
             // Initialize header
@@ -119,6 +143,18 @@ impl Arena {
 
         // Bump the allocation pointer
         self.heap_free += total_size;
+
+        // Allocate or reuse an index in the index table
+        let index = if let Some(free_idx) = self.free_indices.pop() {
+            // Reuse a previously freed index
+            self.index_table[free_idx as usize] = Some(offset);
+            HeapIndex::from_raw(free_idx)
+        } else {
+            // Allocate a new index
+            let idx = self.index_table.len() as u32;
+            self.index_table.push(Some(offset));
+            HeapIndex::from_raw(idx)
+        };
 
         Ok(index)
     }
@@ -132,7 +168,11 @@ impl Arena {
             return;
         }
 
-        let offset = index.as_usize();
+        // Look up the offset in the index table
+        let offset = match self.index_table.get(index.as_usize()).and_then(|opt| *opt) {
+            Some(off) => off,
+            None => return, // Already freed or invalid
+        };
 
         // Check if this is indeed the last block
         if offset < self.heap_free {
@@ -146,6 +186,9 @@ impl Arena {
             // Only free if this is the last allocated block
             if offset + size == self.heap_free {
                 self.heap_free = offset;
+                // Mark the index as free
+                self.index_table[index.as_usize()] = None;
+                self.free_indices.push(index.as_raw());
             }
         }
     }
@@ -162,7 +205,11 @@ impl Arena {
             return;
         }
 
-        let offset = index.as_usize();
+        // Look up the offset in the index table
+        let offset = match self.index_table.get(index.as_usize()).and_then(|opt| *opt) {
+            Some(off) => off,
+            None => return, // Already freed or invalid
+        };
 
         if offset >= self.heap_free {
             return;
@@ -183,6 +230,7 @@ impl Arena {
                 if new_total_size < old_size {
                     header.set_size(new_total_size);
                     self.heap_free = offset + new_total_size;
+                    // Index table offset doesn't change, just the size
                 }
             }
         }
@@ -216,7 +264,12 @@ impl Arena {
     /// 3. No mutable reference to this object exists
     #[inline]
     pub unsafe fn get<T>(&self, index: HeapIndex) -> &T {
-        let offset = index.as_usize();
+        // Look up the offset in the index table
+        let offset = self.index_table
+            .get(index.as_usize())
+            .and_then(|opt| *opt)
+            .expect("Invalid HeapIndex in get");
+
         let header_size = mem::size_of::<MemBlockHeader>();
         let ptr = self.memory.as_ptr().add(offset + header_size);
         &*(ptr as *const T)
@@ -232,7 +285,12 @@ impl Arena {
     /// 3. No other reference to this object exists
     #[inline]
     pub unsafe fn get_mut<T>(&mut self, index: HeapIndex) -> &mut T {
-        let offset = index.as_usize();
+        // Look up the offset in the index table
+        let offset = self.index_table
+            .get(index.as_usize())
+            .and_then(|opt| *opt)
+            .expect("Invalid HeapIndex in get_mut");
+
         let header_size = mem::size_of::<MemBlockHeader>();
         let ptr = self.memory.as_mut_ptr().add(offset + header_size);
         &mut *(ptr as *mut T)
@@ -245,7 +303,12 @@ impl Arena {
     /// The caller must ensure that the index is valid (was returned by alloc and not freed).
     #[inline]
     pub unsafe fn get_header(&self, index: HeapIndex) -> &MemBlockHeader {
-        let offset = index.as_usize();
+        // Look up the offset in the index table
+        let offset = self.index_table
+            .get(index.as_usize())
+            .and_then(|opt| *opt)
+            .expect("Invalid HeapIndex in get_header");
+
         let ptr = self.memory.as_ptr().add(offset);
         &*(ptr as *const MemBlockHeader)
     }
@@ -257,7 +320,12 @@ impl Arena {
     /// The caller must ensure that the index is valid (was returned by alloc and not freed).
     #[inline]
     pub unsafe fn get_header_mut(&mut self, index: HeapIndex) -> &mut MemBlockHeader {
-        let offset = index.as_usize();
+        // Look up the offset in the index table
+        let offset = self.index_table
+            .get(index.as_usize())
+            .and_then(|opt| *opt)
+            .expect("Invalid HeapIndex in get_header_mut");
+
         let ptr = self.memory.as_mut_ptr().add(offset);
         &mut *(ptr as *mut MemBlockHeader)
     }
@@ -282,6 +350,80 @@ impl Arena {
     #[inline]
     pub unsafe fn as_mut_ptr(&mut self) -> *mut u8 {
         self.memory.as_mut_ptr()
+    }
+
+    /// Returns the number of allocated indices (for GC iteration)
+    #[inline]
+    pub(crate) fn index_table_len(&self) -> usize {
+        self.index_table.len()
+    }
+
+    /// Checks if an index is currently valid (allocated and not freed)
+    #[inline]
+    pub(crate) fn is_index_valid(&self, index: HeapIndex) -> bool {
+        self.index_table
+            .get(index.as_usize())
+            .and_then(|opt| *opt)
+            .is_some()
+    }
+
+    /// Gets the memory offset for a valid index (for GC internal use)
+    ///
+    /// Returns None if the index is invalid or freed.
+    #[inline]
+    pub(crate) fn get_offset(&self, index: HeapIndex) -> Option<usize> {
+        self.index_table
+            .get(index.as_usize())
+            .and_then(|opt| *opt)
+    }
+
+    /// Updates the index table entry (for GC compaction)
+    ///
+    /// # Safety
+    ///
+    /// This is only safe to call during GC compaction when no other references exist.
+    #[inline]
+    pub(crate) unsafe fn update_index_offset(&mut self, index: HeapIndex, new_offset: usize) {
+        if let Some(entry) = self.index_table.get_mut(index.as_usize()) {
+            *entry = Some(new_offset);
+        }
+    }
+
+    /// Marks an index as free (for GC sweep)
+    ///
+    /// # Safety
+    ///
+    /// This is only safe to call during GC when the object is known to be dead.
+    #[inline]
+    pub(crate) unsafe fn free_index(&mut self, index: HeapIndex) {
+        if let Some(entry) = self.index_table.get_mut(index.as_usize()) {
+            if entry.is_some() {
+                *entry = None;
+                self.free_indices.push(index.as_raw());
+            }
+        }
+    }
+
+    /// Sets the heap free pointer (for GC compaction)
+    ///
+    /// # Safety
+    ///
+    /// Only call this from GC compaction when it's safe to reset the heap boundary.
+    #[inline]
+    pub(crate) unsafe fn set_heap_free(&mut self, new_heap_free: usize) {
+        self.heap_free = new_heap_free;
+    }
+
+    /// Gets the size of a block at the given offset
+    ///
+    /// # Safety
+    ///
+    /// The offset must point to a valid allocated block.
+    #[inline]
+    pub(crate) unsafe fn get_block_size(&self, offset: usize) -> usize {
+        let ptr = self.memory.as_ptr().add(offset);
+        let header_ptr = ptr as *const MemBlockHeader;
+        (*header_ptr).size()
     }
 }
 
@@ -338,10 +480,12 @@ mod tests {
     fn test_arena_alloc_alignment() {
         let mut arena = Arena::new(1024);
 
-        // Allocate various sizes and verify alignment
+        // Allocate various sizes and verify the underlying memory offsets are aligned
         for size in [1, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
             let idx = arena.alloc(size, MemTag::Object).unwrap();
-            assert_eq!(idx.as_usize() % ALIGNMENT, 0, "Allocation at size {} not aligned", size);
+            // Get the actual memory offset and verify it's aligned
+            let offset = arena.get_offset(idx).expect("Index should be valid");
+            assert_eq!(offset % ALIGNMENT, 0, "Allocation at size {} not aligned", size);
         }
     }
 

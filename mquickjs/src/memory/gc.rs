@@ -12,9 +12,9 @@ use alloc::vec::Vec;
 pub struct GarbageCollector {
     /// Mark stack for tri-color marking (gray objects)
     mark_stack: Vec<HeapIndex>,
-    /// Forwarding table: old index -> new offset
-    /// Used during compaction to update references
-    forwarding_table: HashMap<HeapIndex, usize>,
+    /// Set of marked indices (for efficient lookup during compaction)
+    /// We use this to track which indices are live during sweep/compact
+    marked_indices: Vec<HeapIndex>,
     /// GC roots that must be preserved
     roots: Vec<JSValue>,
 }
@@ -24,7 +24,7 @@ impl GarbageCollector {
     pub fn new() -> Self {
         GarbageCollector {
             mark_stack: Vec::new(),
-            forwarding_table: HashMap::new(),
+            marked_indices: Vec::new(),
             roots: Vec::new(),
         }
     }
@@ -48,22 +48,18 @@ impl GarbageCollector {
     /// Steps:
     /// 1. Mark roots
     /// 2. Mark reachable objects (tri-color marking)
-    /// 3. Sweep unmarked objects
-    /// 4. Compact live objects
-    /// 5. Update references
+    /// 3. Compact live objects and update index table
     pub fn collect(&mut self, arena: &mut Arena) {
         // Clear previous GC state
         self.mark_stack.clear();
-        self.forwarding_table.clear();
+        self.marked_indices.clear();
 
         // Phase 1: Mark all reachable objects
         self.mark_roots(arena);
         self.mark_phase(arena);
 
-        // Phase 2: Sweep unmarked objects (just clear mark bits)
-        self.sweep(arena);
-
-        // Phase 3: Compact live objects
+        // Phase 2: Compact live objects
+        // This also implicitly sweeps dead objects
         self.compact(arena);
     }
 
@@ -97,6 +93,11 @@ impl GarbageCollector {
             return;
         }
 
+        // Check if the index is valid
+        if !arena.is_index_valid(index) {
+            return;
+        }
+
         // SAFETY: index should be valid as it came from a JSValue
         unsafe {
             let header = arena.get_header_mut(index);
@@ -108,6 +109,9 @@ impl GarbageCollector {
 
             // Mark this object
             header.set_gc_mark(true);
+
+            // Track this index as marked
+            self.marked_indices.push(index);
 
             // Push onto mark stack for processing
             self.mark_stack.push(index);
@@ -198,97 +202,73 @@ impl GarbageCollector {
         }
     }
 
-    /// Sweeps unmarked objects and clears mark bits on live ones
-    fn sweep(&mut self, arena: &mut Arena) {
-        let heap_size = arena.heap_usage();
-        let mut offset = 0;
-
-        while offset < heap_size {
-            // SAFETY: We're iterating through allocated memory
-            unsafe {
-                let index = HeapIndex::from_usize(offset);
-                let header = arena.get_header_mut(index);
-                let size = header.size();
-
-                if header.gc_mark() {
-                    // Live object - clear mark bit for next GC cycle
-                    header.set_gc_mark(false);
-                } else {
-                    // Dead object - would call finalizer here if implemented
-                    // For now, just leave it (will be compacted away)
-                }
-
-                offset += size;
-            }
-        }
-    }
-
     /// Compacts live objects using index-based approach
+    ///
+    /// This is the key simplification: we iterate through all indices,
+    /// move live objects to compact memory, and update the index table.
+    /// No need to thread pointers through objects!
     fn compact(&mut self, arena: &mut Arena) {
-        // Phase 1: Build forwarding table
-        // Calculate new addresses for all live objects
-        self.build_forwarding_table(arena);
+        let mut write_offset = 0;
 
-        // Phase 2: Update all references
-        self.update_references(arena);
+        // Sort marked indices to process them in order
+        // This isn't strictly necessary but makes the compaction more predictable
+        self.marked_indices.sort_unstable();
 
-        // Phase 3: Move objects to new locations
-        self.move_objects(arena);
-    }
+        // Create a set of marked indices for O(log n) lookup
+        let marked_set: HashMap<HeapIndex, ()> = self.marked_indices
+            .iter()
+            .map(|&idx| (idx, ()))
+            .collect();
 
-    /// Builds the forwarding table: old index -> new offset
-    fn build_forwarding_table(&mut self, arena: &mut Arena) {
-        let heap_size = arena.heap_usage();
-        let mut old_offset = 0;
-        let mut new_offset = 0;
+        // Iterate through all indices in the index table
+        let index_count = arena.index_table_len();
 
-        while old_offset < heap_size {
-            // SAFETY: Iterating through allocated memory
-            unsafe {
-                let index = HeapIndex::from_usize(old_offset);
-                let header = arena.get_header(index);
-                let size = header.size();
+        for idx in 0..index_count {
+            let index = HeapIndex::from_usize(idx);
 
-                // Note: In sweep phase, we cleared mark bits on live objects
-                // But we need a way to identify live vs dead objects.
-                // For now, we'll consider all objects as live.
-                // TODO: Track dead objects in sweep phase
+            // Get the current offset for this index
+            let old_offset = match arena.get_offset(index) {
+                Some(offset) => offset,
+                None => continue, // Already freed, skip
+            };
 
-                // Record forwarding address
-                self.forwarding_table.insert(index, new_offset);
+            // Check if this object is marked (live)
+            let is_marked = marked_set.contains_key(&index);
 
-                old_offset += size;
-                new_offset += size;
-            }
-        }
-    }
+            if is_marked {
+                // Live object - move it to the compacted region
+                unsafe {
+                    let size = arena.get_block_size(old_offset);
 
-    /// Updates all references using the forwarding table
-    fn update_references(&mut self, arena: &mut Arena) {
-        // Update root references
-        for root_value in &mut self.roots {
-            if let Some(old_index) = (*root_value).to_ptr() {
-                if let Some(&new_offset) = self.forwarding_table.get(&old_index) {
-                    *root_value = JSValue::from_ptr(HeapIndex::from_usize(new_offset));
+                    // Only move if the object isn't already at the target location
+                    if write_offset != old_offset {
+                        // Move the object (header + data)
+                        let src = arena.as_ptr().add(old_offset);
+                        let dst = arena.as_mut_ptr().add(write_offset);
+                        core::ptr::copy(src, dst, size);
+                    }
+
+                    // Update the index table to point to the new location
+                    arena.update_index_offset(index, write_offset);
+
+                    // Clear the mark bit for next GC cycle
+                    let header = arena.get_header_mut(index);
+                    header.set_gc_mark(false);
+
+                    write_offset += size;
+                }
+            } else {
+                // Dead object - free the index
+                unsafe {
+                    arena.free_index(index);
                 }
             }
         }
 
-        // TODO: Update references within objects
-        // This requires scanning each object and updating its pointer fields
-        // We'll implement this when we have concrete object types
-    }
-
-    /// Moves objects to their new locations
-    fn move_objects(&mut self, arena: &mut Arena) {
-        // TODO: Implement actual object movement
-        // This is complex and requires:
-        // 1. A temporary buffer or careful ordering to avoid overwriting
-        // 2. Copying each live object to its new location
-        // 3. Updating arena.heap_free to the new compacted size
-        //
-        // For now, this is a placeholder
-        // We'll implement this fully when we have a complete object system
+        // Update the heap free pointer to the end of the compacted region
+        unsafe {
+            arena.set_heap_free(write_offset);
+        }
     }
 }
 
