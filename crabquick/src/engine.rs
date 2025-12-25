@@ -644,4 +644,226 @@ mod tests {
         let result = engine.eval("function fib(n) { if (n <= 1) return n; return fib(n - 1) + fib(n - 2); } fib(10)").unwrap();
         assert_eq!(result.to_int(), Some(55), "Fibonacci(10) should return 55");
     }
+
+    // ========== Type Coercion Tests ==========
+
+    #[test]
+    fn test_string_plus_number_concatenation() {
+        let mut engine = Engine::new(32768);
+        // "5" + 3 should be "53" (string concatenation)
+        let result = engine.eval_as_string("\"5\" + 3").unwrap();
+        assert_eq!(result, "53", "String + number should concatenate");
+    }
+
+    #[test]
+    fn test_number_plus_string_concatenation() {
+        let mut engine = Engine::new(32768);
+        // 5 + "3" should be "53" (string concatenation)
+        let result = engine.eval_as_string("5 + \"3\"").unwrap();
+        assert_eq!(result, "53", "Number + string should concatenate");
+    }
+
+    #[test]
+    fn test_string_minus_number() {
+        let mut engine = Engine::new(32768);
+        // "5" - 3 should be 2 (numeric subtraction)
+        let result = engine.eval("\"5\" - 3").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 2, "String - number should be numeric");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 2.0, "String - number should be numeric");
+        }
+    }
+
+    #[test]
+    fn test_string_multiply_number() {
+        let mut engine = Engine::new(32768);
+        // "5" * 3 should be 15 (numeric multiplication)
+        let result = engine.eval("\"5\" * 3").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 15, "String * number should be numeric");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 15.0, "String * number should be numeric");
+        }
+    }
+
+    #[test]
+    fn test_string_divide_number() {
+        let mut engine = Engine::new(32768);
+        // "10" / 2 should be 5 (numeric division)
+        let result = engine.eval("\"10\" / 2").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 5, "String / number should be numeric");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 5.0, "String / number should be numeric");
+        }
+    }
+
+    #[test]
+    fn test_abstract_equality_number_string() {
+        let mut engine = Engine::new(32768);
+        // 5 == "5" should be true (abstract equality with coercion)
+        let result = engine.eval("5 == \"5\"").unwrap();
+        assert_eq!(result.to_bool(), Some(true), "5 == \"5\" should be true");
+    }
+
+    #[test]
+    fn test_strict_equality_number_string() {
+        let mut engine = Engine::new(32768);
+        // 5 === "5" should be false (strict equality without coercion)
+        let result = engine.eval("5 === \"5\"").unwrap();
+        assert_eq!(result.to_bool(), Some(false), "5 === \"5\" should be false");
+    }
+
+    #[test]
+    fn test_null_equals_undefined() {
+        let mut engine = Engine::new(32768);
+        // null == undefined should be true
+        let result = engine.eval("null == undefined").unwrap();
+        assert_eq!(result.to_bool(), Some(true), "null == undefined should be true");
+    }
+
+    #[test]
+    fn test_null_strict_equals_undefined() {
+        let mut engine = Engine::new(32768);
+        // null === undefined should be false
+        let result = engine.eval("null === undefined").unwrap();
+        assert_eq!(result.to_bool(), Some(false), "null === undefined should be false");
+    }
+
+    #[test]
+    fn test_boolean_to_number_hello() {
+        let mut engine = Engine::new(32768);
+        // !!"hello" should be true (non-empty string is truthy)
+        let result = engine.eval("!!\"hello\"").unwrap();
+        assert_eq!(result.to_bool(), Some(true), "!!\"hello\" should be true");
+    }
+
+    #[test]
+    fn test_boolean_to_number_empty_string() {
+        let mut engine = Engine::new(32768);
+        // !!"" should be false (empty string is falsy)
+        let result = engine.eval("!!\"\"").unwrap();
+        assert_eq!(result.to_bool(), Some(false), "!!\"\" should be false");
+    }
+
+    #[test]
+    fn test_boolean_to_number_zero() {
+        let mut engine = Engine::new(32768);
+        // !!0 should be false (zero is falsy)
+        let result = engine.eval("!!0").unwrap();
+        assert_eq!(result.to_bool(), Some(false), "!!0 should be false");
+    }
+
+    #[test]
+    fn test_boolean_to_number_one() {
+        let mut engine = Engine::new(32768);
+        // !!1 should be true (non-zero is truthy)
+        let result = engine.eval("!!1").unwrap();
+        assert_eq!(result.to_bool(), Some(true), "!!1 should be true");
+    }
+
+    #[test]
+    fn test_tonumber_null() {
+        let mut engine = Engine::new(32768);
+        // null should convert to 0 in numeric context
+        let result = engine.eval("null + 5").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 5, "null + 5 should be 5");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 5.0, "null + 5 should be 5");
+        }
+    }
+
+    #[test]
+    fn test_tonumber_true() {
+        let mut engine = Engine::new(32768);
+        // true should convert to 1 in numeric context
+        let result = engine.eval("true + 5").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 6, "true + 5 should be 6");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 6.0, "true + 5 should be 6");
+        }
+    }
+
+    #[test]
+    fn test_tonumber_false() {
+        let mut engine = Engine::new(32768);
+        // false should convert to 0 in numeric context
+        let result = engine.eval("false + 5").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 5, "false + 5 should be 5");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 5.0, "false + 5 should be 5");
+        }
+    }
+
+    #[test]
+    fn test_tostring_number() {
+        let mut engine = Engine::new(32768);
+        // Number should convert to string in string context
+        let result = engine.eval_as_string("\"value: \" + 42").unwrap();
+        assert_eq!(result, "value: 42", "Number should convert to string");
+    }
+
+    #[test]
+    fn test_tostring_true() {
+        let mut engine = Engine::new(32768);
+        // true should convert to "true"
+        let result = engine.eval_as_string("\"boolean: \" + true").unwrap();
+        assert_eq!(result, "boolean: true", "true should convert to \"true\"");
+    }
+
+    #[test]
+    fn test_tostring_false() {
+        let mut engine = Engine::new(32768);
+        // false should convert to "false"
+        let result = engine.eval_as_string("\"boolean: \" + false").unwrap();
+        assert_eq!(result, "boolean: false", "false should convert to \"false\"");
+    }
+
+    #[test]
+    fn test_tostring_null() {
+        let mut engine = Engine::new(32768);
+        // null should convert to "null"
+        let result = engine.eval_as_string("\"value: \" + null").unwrap();
+        assert_eq!(result, "value: null", "null should convert to \"null\"");
+    }
+
+    #[test]
+    fn test_tostring_undefined() {
+        let mut engine = Engine::new(32768);
+        // undefined should convert to "undefined"
+        let result = engine.eval_as_string("\"value: \" + undefined").unwrap();
+        assert_eq!(result, "value: undefined", "undefined should convert to \"undefined\"");
+    }
+
+    #[test]
+    fn test_empty_string_to_number() {
+        let mut engine = Engine::new(32768);
+        // Empty string should convert to 0
+        let result = engine.eval("\"\" - 0").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 0, "Empty string should convert to 0");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 0.0, "Empty string should convert to 0");
+        }
+    }
+
+    #[test]
+    fn test_invalid_string_to_nan() {
+        let mut engine = Engine::new(32768);
+        // Invalid numeric string should convert to NaN
+        let result = engine.eval("\"abc\" - 0").unwrap();
+        let num = engine.context.get_number(result).expect("Should be a number");
+        assert!(num.is_nan(), "Invalid string should convert to NaN");
+    }
 }

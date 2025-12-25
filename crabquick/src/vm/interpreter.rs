@@ -811,7 +811,7 @@ impl VM {
                     .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
                 let a = self.value_stack.pop()
                     .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
-                let result = self.op_strict_eq(a, b);
+                let result = self.op_strict_eq(ctx, a, b);
                 self.value_stack.push(JSValue::bool(result))
                     .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
                 Ok(None)
@@ -822,7 +822,7 @@ impl VM {
                     .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
                 let a = self.value_stack.pop()
                     .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
-                let result = !self.op_strict_eq(a, b);
+                let result = !self.op_strict_eq(ctx, a, b);
                 self.value_stack.push(JSValue::bool(result))
                     .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
                 Ok(None)
@@ -832,7 +832,7 @@ impl VM {
             LNot => {
                 let a = self.value_stack.pop()
                     .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
-                let result = !self.to_boolean(a);
+                let result = !self.to_boolean(ctx, a);
                 self.value_stack.push(JSValue::bool(result))
                     .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
                 Ok(None)
@@ -843,7 +843,7 @@ impl VM {
                 if let Operand::Label(offset) = instruction.operand {
                     let a = self.value_stack.peek()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
-                    if !self.to_boolean(a) {
+                    if !self.to_boolean(ctx, a) {
                         // Short-circuit: jump and keep 'a' on stack
                         reader.set_pc((reader.pc() as i32 + offset) as usize);
                     } else {
@@ -861,7 +861,7 @@ impl VM {
                 if let Operand::Label(offset) = instruction.operand {
                     let a = self.value_stack.peek()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
-                    if self.to_boolean(a) {
+                    if self.to_boolean(ctx, a) {
                         // Short-circuit: jump and keep 'a' on stack
                         reader.set_pc((reader.pc() as i32 + offset) as usize);
                     } else {
@@ -973,7 +973,7 @@ impl VM {
                 if let Operand::Label(offset) = instruction.operand {
                     let cond = self.value_stack.pop()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
-                    if !self.to_boolean(cond) {
+                    if !self.to_boolean(ctx, cond) {
                         reader.set_pc((reader.pc() as i32 + offset) as usize);
                     }
                     Ok(None)
@@ -986,7 +986,7 @@ impl VM {
                 if let Operand::Label(offset) = instruction.operand {
                     let cond = self.value_stack.pop()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
-                    if self.to_boolean(cond) {
+                    if self.to_boolean(ctx, cond) {
                         reader.set_pc((reader.pc() as i32 + offset) as usize);
                     }
                     Ok(None)
@@ -1408,17 +1408,9 @@ impl VM {
         Ok(JSValue::from_int(0))
     }
 
-    fn to_boolean(&self, val: JSValue) -> bool {
-        if val.is_null() || val.is_undefined() {
-            return false;
-        }
-        if let Some(b) = val.to_bool() {
-            return b;
-        }
-        if let Some(i) = val.to_int() {
-            return i != 0;
-        }
-        true
+    fn to_boolean(&self, ctx: &Context, val: JSValue) -> bool {
+        use crate::runtime::conversion;
+        conversion::to_boolean(ctx, val)
     }
 
     fn typeof_value(&self, val: JSValue) -> &'static str {
@@ -1437,29 +1429,25 @@ impl VM {
         }
     }
 
-    // Arithmetic operators (simplified implementations)
+    // Arithmetic operators (with type coercion)
     fn op_add(&self, ctx: &mut Context, a: JSValue, b: JSValue) -> Result<JSValue, JSValue> {
-        let a_num = ctx.get_number(a).or_else(|| a.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        let b_num = ctx.get_number(b).or_else(|| b.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        ctx.new_number(a_num + b_num).map_err(|_| JSValue::undefined())
+        use crate::runtime::operators;
+        operators::add(ctx, a, b).map_err(|_| JSValue::undefined())
     }
 
     fn op_sub(&self, ctx: &mut Context, a: JSValue, b: JSValue) -> Result<JSValue, JSValue> {
-        let a_num = ctx.get_number(a).or_else(|| a.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        let b_num = ctx.get_number(b).or_else(|| b.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        ctx.new_number(a_num - b_num).map_err(|_| JSValue::undefined())
+        use crate::runtime::operators;
+        operators::subtract(ctx, a, b).map_err(|_| JSValue::undefined())
     }
 
     fn op_mul(&self, ctx: &mut Context, a: JSValue, b: JSValue) -> Result<JSValue, JSValue> {
-        let a_num = ctx.get_number(a).or_else(|| a.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        let b_num = ctx.get_number(b).or_else(|| b.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        ctx.new_number(a_num * b_num).map_err(|_| JSValue::undefined())
+        use crate::runtime::operators;
+        operators::multiply(ctx, a, b).map_err(|_| JSValue::undefined())
     }
 
     fn op_div(&self, ctx: &mut Context, a: JSValue, b: JSValue) -> Result<JSValue, JSValue> {
-        let a_num = ctx.get_number(a).or_else(|| a.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        let b_num = ctx.get_number(b).or_else(|| b.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        ctx.new_number(a_num / b_num).map_err(|_| JSValue::undefined())
+        use crate::runtime::operators;
+        operators::divide(ctx, a, b).map_err(|_| JSValue::undefined())
     }
 
     fn op_mod(&self, ctx: &mut Context, a: JSValue, b: JSValue) -> Result<JSValue, JSValue> {
@@ -1489,38 +1477,38 @@ impl VM {
         ctx.new_number(a_num - 1.0).map_err(|_| JSValue::undefined())
     }
 
-    // Comparison operators
+    // Comparison operators (with type coercion)
     fn op_lt(&self, ctx: &Context, a: JSValue, b: JSValue) -> Result<bool, JSValue> {
-        let a_num = ctx.get_number(a).or_else(|| a.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        let b_num = ctx.get_number(b).or_else(|| b.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        Ok(a_num < b_num)
+        use crate::runtime::compare;
+        Ok(compare::less_than(ctx, a, b))
     }
 
     fn op_lte(&self, ctx: &Context, a: JSValue, b: JSValue) -> Result<bool, JSValue> {
-        let a_num = ctx.get_number(a).or_else(|| a.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        let b_num = ctx.get_number(b).or_else(|| b.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        Ok(a_num <= b_num)
+        use crate::runtime::compare;
+        // a <= b is equivalent to !(a > b)
+        Ok(!compare::less_than(ctx, b, a))
     }
 
     fn op_gt(&self, ctx: &Context, a: JSValue, b: JSValue) -> Result<bool, JSValue> {
-        let a_num = ctx.get_number(a).or_else(|| a.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        let b_num = ctx.get_number(b).or_else(|| b.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        Ok(a_num > b_num)
+        use crate::runtime::compare;
+        // a > b is equivalent to b < a
+        Ok(compare::less_than(ctx, b, a))
     }
 
     fn op_gte(&self, ctx: &Context, a: JSValue, b: JSValue) -> Result<bool, JSValue> {
-        let a_num = ctx.get_number(a).or_else(|| a.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        let b_num = ctx.get_number(b).or_else(|| b.to_int().map(|i| i as f64)).unwrap_or(0.0);
-        Ok(a_num >= b_num)
+        use crate::runtime::compare;
+        // a >= b is equivalent to !(a < b)
+        Ok(!compare::less_than(ctx, a, b))
     }
 
-    fn op_eq(&self, _ctx: &Context, a: JSValue, b: JSValue) -> bool {
-        // Simplified equality (would need full type coercion)
-        a == b
+    fn op_eq(&self, ctx: &Context, a: JSValue, b: JSValue) -> bool {
+        use crate::runtime::compare;
+        compare::abstract_equal(ctx, a, b)
     }
 
-    fn op_strict_eq(&self, a: JSValue, b: JSValue) -> bool {
-        a == b
+    fn op_strict_eq(&self, ctx: &Context, a: JSValue, b: JSValue) -> bool {
+        use crate::runtime::compare;
+        compare::strict_equal(ctx, a, b)
     }
 
     // Bitwise operators
