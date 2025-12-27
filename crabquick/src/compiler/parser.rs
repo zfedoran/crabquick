@@ -322,6 +322,20 @@ impl<'a> Parser<'a> {
                 });
             }
 
+            // Check for for-of
+            if self.consume_if(&TokenKind::Of) {
+                let right = self.parse_expression()?;
+                self.expect(TokenKind::RParen)?;
+                let body = Box::new(self.parse_statement()?);
+
+                return Ok(Stmt::ForOf {
+                    left: ForInit::VarDecl { kind, declarations },
+                    right,
+                    body,
+                    loc,
+                });
+            }
+
             self.expect(TokenKind::Semicolon)?;
             Some(ForInit::VarDecl { kind, declarations })
         } else {
@@ -334,6 +348,20 @@ impl<'a> Parser<'a> {
                 let body = Box::new(self.parse_statement()?);
 
                 return Ok(Stmt::ForIn {
+                    left: ForInit::Expr(expr),
+                    right,
+                    body,
+                    loc,
+                });
+            }
+
+            // Check for for-of
+            if self.consume_if(&TokenKind::Of) {
+                let right = self.parse_expression()?;
+                self.expect(TokenKind::RParen)?;
+                let body = Box::new(self.parse_statement()?);
+
+                return Ok(Stmt::ForOf {
                     left: ForInit::Expr(expr),
                     right,
                     body,

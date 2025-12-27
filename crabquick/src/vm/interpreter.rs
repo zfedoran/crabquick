@@ -43,6 +43,10 @@ pub struct VM {
     /// Promoted var_refs for current frame: (frame_sp, local_slot) -> var_ref_idx
     /// This ensures multiple closures share the same var_ref for the same captured variable
     promoted_var_refs: Vec<(usize, usize, HeapIndex)>,
+    /// For-in iterator state: (keys, current_index)
+    for_in_state: Vec<(Vec<String>, usize)>,
+    /// For-of iterator state: (values, current_index)
+    for_of_state: Vec<(Vec<JSValue>, usize)>,
 }
 
 /// VM execution result
@@ -79,6 +83,8 @@ impl VM {
             atom_table: Vec::new(),
             function_table: Vec::new(),
             promoted_var_refs: Vec::new(),
+            for_in_state: Vec::new(),
+            for_of_state: Vec::new(),
         }
     }
 
@@ -1479,6 +1485,98 @@ impl VM {
                 }
             }
 
+            // ===== For-in/For-of Iteration =====
+            ForInStart => {
+                // Pop the object to iterate over
+                let obj = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                // Get all enumerable property keys
+                let keys = self.get_enumerable_keys(ctx, obj);
+
+                // Push first key (or undefined if empty)
+                if keys.is_empty() {
+                    self.value_stack.push(JSValue::undefined())
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                } else {
+                    let first_key = ctx.new_string(&keys[0])
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                    self.value_stack.push(first_key)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                }
+
+                // Store iterator state (keys, index) - will be used by ForInNext
+                self.for_in_state.push((keys, 0));
+                Ok(None)
+            }
+
+            ForInNext => {
+                // Get current iterator state
+                if let Some((keys, ref mut index)) = self.for_in_state.last_mut() {
+                    *index += 1;
+                    if *index < keys.len() {
+                        // Get next key
+                        let key_str = keys[*index].clone();
+                        let key = ctx.new_string(&key_str)
+                            .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                        self.value_stack.push(key)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    } else {
+                        // No more keys - push undefined to signal end
+                        self.for_in_state.pop();
+                        self.value_stack.push(JSValue::undefined())
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    }
+                } else {
+                    self.value_stack.push(JSValue::undefined())
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                }
+                Ok(None)
+            }
+
+            ForOfStart => {
+                // Pop the iterable
+                let iterable = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                // Get array elements (for now, only support arrays)
+                let values = self.get_iterable_values(ctx, iterable);
+
+                // Store iterator state
+                self.for_of_state.push((values.clone(), 0));
+
+                // Push first value (or undefined if empty)
+                if values.is_empty() {
+                    self.value_stack.push(JSValue::undefined())
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                } else {
+                    self.value_stack.push(values[0])
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                }
+                Ok(None)
+            }
+
+            ForOfNext => {
+                // Get current iterator state
+                if let Some((values, ref mut index)) = self.for_of_state.last_mut() {
+                    *index += 1;
+                    if *index < values.len() {
+                        let val = values[*index];
+                        self.value_stack.push(val)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    } else {
+                        // No more values - push undefined to signal end
+                        self.for_of_state.pop();
+                        self.value_stack.push(JSValue::undefined())
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    }
+                } else {
+                    self.value_stack.push(JSValue::undefined())
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                }
+                Ok(None)
+            }
+
             TypeOf => {
                 let val = self.value_stack.pop()
                     .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
@@ -2308,6 +2406,120 @@ impl VM {
         } else {
             "undefined"
         }
+    }
+
+    /// Get all enumerable property keys from an object (for for...in)
+    fn get_enumerable_keys(&self, ctx: &Context, obj: JSValue) -> Vec<String> {
+        use crate::runtime::init::string_to_atom;
+        let mut keys = Vec::new();
+
+        // Handle primitives - they have no enumerable own properties
+        if obj.is_undefined() || obj.is_null() || obj.is_bool() || obj.is_int() {
+            return keys;
+        }
+
+        // Handle heap-allocated objects
+        if let Some(index) = obj.to_ptr() {
+            use crate::memory::MemTag;
+            unsafe {
+                let header = ctx.arena().get_header(index);
+                match header.mtag() {
+                    MemTag::Float64 => {
+                        // Numbers have no enumerable keys
+                        return keys;
+                    }
+                    MemTag::String => {
+                        // Strings have indexed properties for each character
+                        if let Some(s) = ctx.get_string(obj) {
+                            for i in 0..s.len() {
+                                keys.push(i.to_string());
+                            }
+                        }
+                        return keys;
+                    }
+                    MemTag::Object => {
+                        // Check if it's an array-like object (has numeric indices and length)
+                        let length_atom = string_to_atom("length");
+                        if let Some(length) = ctx.get_property(obj, length_atom) {
+                            // Handle both tagged integers and Float64 numbers
+                            let len = length.to_int()
+                                .map(|i| i as i32)
+                                .or_else(|| ctx.get_number(length).map(|f| f as i32))
+                                .unwrap_or(0);
+                            if len > 0 {
+                                // This is an array-like object
+                                for i in 0..(len as usize) {
+                                    keys.push(i.to_string());
+                                }
+                                return keys;
+                            }
+                        }
+                        // For regular objects, we can't easily get string keys
+                        // due to hashing limitation - this is a known limitation
+                        return keys;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        keys
+    }
+
+    /// Get all values from an iterable (for for...of)
+    fn get_iterable_values(&self, ctx: &mut Context, iterable: JSValue) -> Vec<JSValue> {
+        use crate::runtime::init::string_to_atom;
+        let mut values = Vec::new();
+
+        if iterable.is_undefined() || iterable.is_null() {
+            return values;
+        }
+
+        if let Some(index) = iterable.to_ptr() {
+            use crate::memory::MemTag;
+            unsafe {
+                let header = ctx.arena().get_header(index);
+                match header.mtag() {
+                    MemTag::String => {
+                        // Strings iterate over characters
+                        // Collect chars first to avoid borrow issues
+                        let chars: Vec<char> = if let Some(s) = ctx.get_string(iterable) {
+                            s.chars().collect()
+                        } else {
+                            Vec::new()
+                        };
+                        for ch in chars {
+                            // Create a string for each character
+                            if let Ok(char_str) = ctx.new_string(&ch.to_string()) {
+                                values.push(char_str);
+                            }
+                        }
+                    }
+                    MemTag::Object => {
+                        // Check if it's an array-like object with length property
+                        let length_atom = string_to_atom("length");
+                        if let Some(length) = ctx.get_property(iterable, length_atom) {
+                            // Handle both tagged integers and Float64 numbers
+                            let len = length.to_int()
+                                .map(|i| i as i32)
+                                .or_else(|| ctx.get_number(length).map(|f| f as i32))
+                                .unwrap_or(0);
+                            for i in 0..(len as usize) {
+                                let idx_atom = string_to_atom(&i.to_string());
+                                if let Some(val) = ctx.get_property(iterable, idx_atom) {
+                                    values.push(val);
+                                } else {
+                                    values.push(JSValue::undefined());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        values
     }
 
     // Arithmetic operators (with type coercion)

@@ -319,8 +319,16 @@ pub enum Stmt {
         loc: SourceLocation,
     },
 
-    /// For-in loop
+    /// For-in loop (iterate over object keys)
     ForIn {
+        left: ForInit,
+        right: Expr,
+        body: Box<Stmt>,
+        loc: SourceLocation,
+    },
+
+    /// For-of loop (iterate over iterable values)
+    ForOf {
         left: ForInit,
         right: Expr,
         body: Box<Stmt>,
@@ -385,6 +393,7 @@ impl Stmt {
             Stmt::DoWhile { loc, .. } |
             Stmt::For { loc, .. } |
             Stmt::ForIn { loc, .. } |
+            Stmt::ForOf { loc, .. } |
             Stmt::Break { loc, .. } |
             Stmt::Continue { loc, .. } |
             Stmt::Return { loc, .. } |

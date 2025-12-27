@@ -96,6 +96,8 @@ pub enum TokenKind {
     Delete,
     /// in
     In,
+    /// of (for for...of loops)
+    Of,
     /// instanceof
     InstanceOf,
 
@@ -388,6 +390,7 @@ impl<'a> Lexer<'a> {
             "void" => TokenKind::Void,
             "delete" => TokenKind::Delete,
             "in" => TokenKind::In,
+            "of" => TokenKind::Of,
             "instanceof" => TokenKind::InstanceOf,
             "true" => TokenKind::True,
             "false" => TokenKind::False,

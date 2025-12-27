@@ -673,6 +673,8 @@ impl Opcode {
             Opcode::GetIterator | Opcode::GetAsyncIterator | Opcode::IteratorNext |
             Opcode::IteratorClose | Opcode::IteratorCheckObject |
             Opcode::TypeOf | Opcode::Delete | Opcode::DeleteVar | Opcode::Void |
+            Opcode::ForInStart | Opcode::ForInNext |
+            Opcode::ForOfStart | Opcode::ForOfNext |
             Opcode::Nop => None,
 
             // U8 operands
@@ -714,9 +716,7 @@ impl Opcode {
             Opcode::IfFalse | Opcode::IfTrue | Opcode::Goto |
             Opcode::Gosub | Opcode::Ret | Opcode::Break | Opcode::Continue |
             Opcode::LAnd | Opcode::LOr | Opcode::Nullish |
-            Opcode::PushCatchOffset |
-            Opcode::ForInStart | Opcode::ForInNext |
-            Opcode::ForOfStart | Opcode::ForOfNext => Label,
+            Opcode::PushCatchOffset => Label,
 
             // Const8 operands
             Opcode::PushConst8 | Opcode::FClosure => Const8,

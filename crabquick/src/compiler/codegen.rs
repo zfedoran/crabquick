@@ -143,6 +143,10 @@ impl Scope {
 struct LoopContext {
     break_label: LabelId,
     continue_label: LabelId,
+    /// Positions of break jumps that need patching
+    break_jumps: Vec<usize>,
+    /// Positions of continue jumps that need patching
+    continue_jumps: Vec<usize>,
 }
 
 /// Function bytecode entry
@@ -509,6 +513,10 @@ impl CodeGenerator {
                 self.collect_vars_in_stmt(body, vars);
             }
             Stmt::ForIn { right, body, .. } => {
+                self.collect_vars_in_expr(right, vars);
+                self.collect_vars_in_stmt(body, vars);
+            }
+            Stmt::ForOf { right, body, .. } => {
                 self.collect_vars_in_expr(right, vars);
                 self.collect_vars_in_stmt(body, vars);
             }
@@ -898,7 +906,7 @@ impl CodeGenerator {
                 let break_label = self.create_label();
                 let continue_label = self.create_label();
 
-                self.loop_stack.push(LoopContext { break_label, continue_label });
+                self.loop_stack.push(LoopContext { break_label, continue_label, break_jumps: Vec::new(), continue_jumps: Vec::new() });
 
                 // Compile test
                 self.gen_expr(test)?;
@@ -915,9 +923,16 @@ impl CodeGenerator {
                 let jump_dist = (loop_start as i32) - (goto_offset as i32) - 4;
                 self.emit(Instruction::with_label(Opcode::Goto, jump_dist));
 
-                // Patch break jump
+                // Patch exit jump
                 let end_pos = self.writer.pc();
                 self.writer.patch_i32(if_false_offset, (end_pos as i32) - (if_false_offset as i32) - 4);
+
+                // Patch all break jumps to point here
+                if let Some(ctx) = self.loop_stack.last() {
+                    for &patch_offset in &ctx.break_jumps {
+                        self.writer.patch_i32(patch_offset, (end_pos as i32) - (patch_offset as i32) - 4);
+                    }
+                }
 
                 self.loop_stack.pop();
                 Ok(())
@@ -951,7 +966,7 @@ impl CodeGenerator {
                 let break_label = self.create_label();
                 let continue_label = self.create_label();
 
-                self.loop_stack.push(LoopContext { break_label, continue_label });
+                self.loop_stack.push(LoopContext { break_label, continue_label, break_jumps: Vec::new(), continue_jumps: Vec::new() });
 
                 // Compile test (if present)
                 let if_false_offset = if let Some(ref test) = test {
@@ -978,9 +993,16 @@ impl CodeGenerator {
                 self.emit(Instruction::with_label(Opcode::Goto, jump_dist));
 
                 // Patch test jump (if present)
+                let end_pos = self.writer.pc();
                 if let Some(offset) = if_false_offset {
-                    let end_pos = self.writer.pc();
                     self.writer.patch_i32(offset, (end_pos as i32) - (offset as i32) - 4);
+                }
+
+                // Patch all break jumps to point here
+                if let Some(ctx) = self.loop_stack.last() {
+                    for &patch_offset in &ctx.break_jumps {
+                        self.writer.patch_i32(patch_offset, (end_pos as i32) - (patch_offset as i32) - 4);
+                    }
                 }
 
                 self.loop_stack.pop();
@@ -999,17 +1021,27 @@ impl CodeGenerator {
             }
 
             Stmt::Break { .. } => {
-                if let Some(ctx) = self.loop_stack.last() {
-                    // Jump to break label - for simplicity, we'll emit a placeholder
-                    self.emit_simple(Opcode::ReturnUndef); // Stub
+                if self.loop_stack.last().is_some() {
+                    // Emit a Goto with placeholder offset
+                    let patch_offset = self.writer.pc() + 1;
+                    self.emit(Instruction::with_label(Opcode::Goto, 0)); // Will patch
+                    // Record this position for patching at end of loop
+                    if let Some(ctx) = self.loop_stack.last_mut() {
+                        ctx.break_jumps.push(patch_offset);
+                    }
                 }
                 Ok(())
             }
 
             Stmt::Continue { .. } => {
-                if let Some(ctx) = self.loop_stack.last() {
-                    // Jump to continue label - for simplicity, we'll emit a placeholder
-                    self.emit_simple(Opcode::Nop); // Stub
+                if self.loop_stack.last().is_some() {
+                    // Emit a Goto with placeholder offset
+                    let patch_offset = self.writer.pc() + 1;
+                    self.emit(Instruction::with_label(Opcode::Goto, 0)); // Will patch
+                    // Record this position for patching at end of loop
+                    if let Some(ctx) = self.loop_stack.last_mut() {
+                        ctx.continue_jumps.push(patch_offset);
+                    }
                 }
                 Ok(())
             }
@@ -1026,7 +1058,163 @@ impl CodeGenerator {
                 Ok(())
             }
 
-            Stmt::DoWhile { .. } | Stmt::ForIn { .. } | Stmt::Switch { .. } | Stmt::Empty { .. } => {
+            Stmt::ForIn { left, right, body, .. } => {
+                // Create new scope for loop variable
+                let new_scope = Scope::with_parent(self.scope.clone());
+                let old_scope = core::mem::replace(&mut self.scope, new_scope);
+
+                // Get the loop variable index
+                let var_index = match left {
+                    ForInit::VarDecl { kind, declarations } => {
+                        if let Some(decl) = declarations.first() {
+                            self.scope.add_binding(decl.name.clone(), *kind)
+                        } else {
+                            0
+                        }
+                    }
+                    ForInit::Expr(expr) => {
+                        // For expression form, we need to store to the variable
+                        // For now assume it's an identifier
+                        if let Expr::Identifier(name, _) = expr {
+                            self.scope.find_binding(name).map(|(idx, _)| idx).unwrap_or(0)
+                        } else {
+                            0
+                        }
+                    }
+                };
+
+                // Evaluate the object to iterate over
+                self.gen_expr(right)?;
+
+                // ForInStart: takes object from stack, pushes iterator state and first key
+                self.emit_simple(Opcode::ForInStart);
+
+                let loop_start = self.writer.pc();
+                let break_label = self.create_label();
+                let continue_label = self.create_label();
+                self.loop_stack.push(LoopContext { break_label, continue_label, break_jumps: Vec::new(), continue_jumps: Vec::new() });
+
+                // Duplicate the iterator result to check if done
+                self.emit_simple(Opcode::Dup);
+                self.emit_simple(Opcode::Undefined);
+                self.emit_simple(Opcode::StrictEq);
+
+                // If equal to undefined, exit loop
+                let if_true_offset = self.writer.pc() + 1;
+                self.emit(Instruction::with_label(Opcode::IfTrue, 0)); // Will patch
+
+                // Store key in loop variable
+                self.emit(Instruction::with_u8(Opcode::PutLoc, var_index));
+
+                // Execute body
+                self.gen_stmt(body)?;
+
+                // ForInNext: pops old state, pushes next key (or undefined if done)
+                self.emit_simple(Opcode::ForInNext);
+
+                // Jump back to loop start
+                let goto_offset = self.writer.pc() + 1;
+                let jump_dist = (loop_start as i32) - (goto_offset as i32) - 4;
+                self.emit(Instruction::with_label(Opcode::Goto, jump_dist));
+
+                // Patch exit jump
+                let end_pos = self.writer.pc();
+                self.writer.patch_i32(if_true_offset, (end_pos as i32) - (if_true_offset as i32) - 4);
+
+                // Drop remaining iterator state
+                self.emit_simple(Opcode::Drop);
+
+                // Patch all break jumps to point here (after Drop)
+                let after_loop_pos = self.writer.pc();
+                if let Some(ctx) = self.loop_stack.last() {
+                    for &patch_offset in &ctx.break_jumps {
+                        self.writer.patch_i32(patch_offset, (after_loop_pos as i32) - (patch_offset as i32) - 4);
+                    }
+                }
+
+                self.loop_stack.pop();
+                self.scope = old_scope;
+                Ok(())
+            }
+
+            Stmt::ForOf { left, right, body, .. } => {
+                // Create new scope for loop variable
+                let new_scope = Scope::with_parent(self.scope.clone());
+                let old_scope = core::mem::replace(&mut self.scope, new_scope);
+
+                // Get the loop variable index
+                let var_index = match left {
+                    ForInit::VarDecl { kind, declarations } => {
+                        if let Some(decl) = declarations.first() {
+                            self.scope.add_binding(decl.name.clone(), *kind)
+                        } else {
+                            0
+                        }
+                    }
+                    ForInit::Expr(expr) => {
+                        if let Expr::Identifier(name, _) = expr {
+                            self.scope.find_binding(name).map(|(idx, _)| idx).unwrap_or(0)
+                        } else {
+                            0
+                        }
+                    }
+                };
+
+                // Evaluate the iterable
+                self.gen_expr(right)?;
+
+                // ForOfStart: takes iterable from stack, pushes iterator state and first value
+                self.emit_simple(Opcode::ForOfStart);
+
+                let loop_start = self.writer.pc();
+                let break_label = self.create_label();
+                let continue_label = self.create_label();
+                self.loop_stack.push(LoopContext { break_label, continue_label, break_jumps: Vec::new(), continue_jumps: Vec::new() });
+
+                // Duplicate to check if done (undefined means done)
+                self.emit_simple(Opcode::Dup);
+                self.emit_simple(Opcode::Undefined);
+                self.emit_simple(Opcode::StrictEq);
+
+                // If equal to undefined, exit loop
+                let if_true_offset = self.writer.pc() + 1;
+                self.emit(Instruction::with_label(Opcode::IfTrue, 0)); // Will patch
+
+                // Store value in loop variable
+                self.emit(Instruction::with_u8(Opcode::PutLoc, var_index));
+
+                // Execute body
+                self.gen_stmt(body)?;
+
+                // ForOfNext: get next value
+                self.emit_simple(Opcode::ForOfNext);
+
+                // Jump back to loop start
+                let goto_offset = self.writer.pc() + 1;
+                let jump_dist = (loop_start as i32) - (goto_offset as i32) - 4;
+                self.emit(Instruction::with_label(Opcode::Goto, jump_dist));
+
+                // Patch exit jump
+                let end_pos = self.writer.pc();
+                self.writer.patch_i32(if_true_offset, (end_pos as i32) - (if_true_offset as i32) - 4);
+
+                // Drop remaining iterator state
+                self.emit_simple(Opcode::Drop);
+
+                // Patch all break jumps to point here (after Drop)
+                let after_loop_pos = self.writer.pc();
+                if let Some(ctx) = self.loop_stack.last() {
+                    for &patch_offset in &ctx.break_jumps {
+                        self.writer.patch_i32(patch_offset, (after_loop_pos as i32) - (patch_offset as i32) - 4);
+                    }
+                }
+
+                self.loop_stack.pop();
+                self.scope = old_scope;
+                Ok(())
+            }
+
+            Stmt::DoWhile { .. } | Stmt::Switch { .. } | Stmt::Empty { .. } => {
                 // These are stubs for now
                 Ok(())
             }
