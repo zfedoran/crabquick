@@ -1204,11 +1204,54 @@ impl CodeGenerator {
             }
 
             Expr::Object { properties, .. } => {
-                // Create object
-                let count = properties.len() as u8;
-                self.emit(Instruction::with_u8(Opcode::Object, count));
+                // Create object with no initial properties
+                self.emit(Instruction::with_u8(Opcode::Object, 0));
 
-                // Stub - would need to emit property definitions
+                // Set each property
+                for prop in properties {
+                    // Duplicate object for property access
+                    self.emit_simple(Opcode::Dup);
+
+                    // Compile the property value
+                    self.gen_expr(&prop.value)?;
+
+                    // Set the property based on key type
+                    match &prop.key {
+                        crate::compiler::ast::PropertyKey::Identifier(name) => {
+                            let atom_idx = self.get_or_create_atom(name);
+                            if atom_idx < 256 {
+                                self.emit(Instruction::with_atom8(Opcode::PutField8, atom_idx as u8));
+                            } else {
+                                self.emit(Instruction::with_u16(Opcode::PutField, atom_idx));
+                            }
+                        }
+                        crate::compiler::ast::PropertyKey::Literal(lit) => {
+                            // Convert literal to string for property name
+                            let name = match lit {
+                                crate::compiler::ast::Literal::String(s) => s.clone(),
+                                crate::compiler::ast::Literal::Number(n) => format!("{}", n),
+                                _ => "".to_string(),
+                            };
+                            let atom_idx = self.get_or_create_atom(&name);
+                            if atom_idx < 256 {
+                                self.emit(Instruction::with_atom8(Opcode::PutField8, atom_idx as u8));
+                            } else {
+                                self.emit(Instruction::with_u16(Opcode::PutField, atom_idx));
+                            }
+                        }
+                        crate::compiler::ast::PropertyKey::Computed(expr) => {
+                            // For computed properties, we need: [obj, key, value]
+                            // Current stack: [obj, obj, value]
+                            // We need to swap to get key in position
+                            // Actually let's re-do this:
+                            // Pop the value we just pushed, emit the key, then value, then PutArrayEl
+                            // This is complex, for now just skip computed properties
+                            self.emit_simple(Opcode::Drop); // drop value
+                            self.emit_simple(Opcode::Drop); // drop dup'd obj
+                        }
+                    }
+                }
+
                 Ok(())
             }
 

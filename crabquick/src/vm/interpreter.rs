@@ -1332,7 +1332,7 @@ impl VM {
             TypeOf => {
                 let val = self.value_stack.pop()
                     .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
-                let type_str = self.typeof_value(val);
+                let type_str = self.typeof_value(ctx, val);
                 let result = ctx.new_string(type_str)
                     .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
                 self.value_stack.push(result)
@@ -1582,16 +1582,90 @@ impl VM {
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
 
                     // Pop object (this)
-                    let this = self.value_stack.pop()
+                    let _this = self.value_stack.pop()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
 
-                    // Call the function with 'this'
-                    let result = ctx.call_function(func, this, &args)?;
+                    // Handle closures first
+                    if ctx.is_closure(func) {
+                        let closure_idx = match func.to_ptr() {
+                            Some(idx) => idx,
+                            None => return Err(self.throw_error(ctx, "Invalid closure value")),
+                        };
 
-                    // Push result
-                    self.value_stack.push(result)
-                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
-                    Ok(None)
+                        let (bytecode_index, param_count, local_count) = match ctx.get_closure(closure_idx) {
+                            Some(closure) => (closure.bytecode_index, closure.param_count as usize, closure.local_count as usize),
+                            None => return Err(self.throw_error(ctx, "Invalid closure")),
+                        };
+
+                        while args.len() < param_count {
+                            args.push(JSValue::undefined());
+                        }
+
+                        let base_sp = self.value_stack.len();
+                        for arg in &args {
+                            self.value_stack.push(*arg)
+                                .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        for _ in param_count..local_count {
+                            self.value_stack.push(JSValue::undefined())
+                                .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        let frame = StackFrame::new_closure(func, base_sp, args.len() as u16, JSValue::undefined(), closure_idx);
+                        self.call_stack.push(frame)
+                            .map_err(|_| self.throw_error(ctx, "Call stack overflow"))?;
+
+                        let result = self.execute_bytecode_function(ctx, bytecode_index, base_sp, local_count, Some(closure_idx));
+
+                        let _ = self.call_stack.pop();
+                        let result = result?;
+
+                        self.value_stack.truncate(base_sp);
+                        self.value_stack.push(result)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        Ok(None)
+                    } else if let Some(bc_func) = ctx.get_bytecode_function(func) {
+                        // Bytecode function
+                        let func_bc_index = bc_func.bytecode_index();
+                        let param_count = bc_func.param_count() as usize;
+                        let local_count = bc_func.local_count() as usize;
+
+                        while args.len() < param_count {
+                            args.push(JSValue::undefined());
+                        }
+
+                        let base_sp = self.value_stack.len();
+                        for arg in &args {
+                            self.value_stack.push(*arg)
+                                .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        for _ in param_count..local_count {
+                            self.value_stack.push(JSValue::undefined())
+                                .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        let frame = StackFrame::new(func, base_sp, argc, JSValue::undefined());
+                        self.call_stack.push(frame)
+                            .map_err(|_| self.throw_error(ctx, "Call stack overflow"))?;
+
+                        let result = self.execute_bytecode_function(ctx, func_bc_index, base_sp, local_count, None);
+
+                        let _ = self.call_stack.pop();
+                        let result = result?;
+
+                        self.value_stack.truncate(base_sp);
+                        self.value_stack.push(result)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        Ok(None)
+                    } else {
+                        // Native function - use ctx.call_function
+                        let result = ctx.call_function(func, _this, &args)?;
+                        self.value_stack.push(result)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        Ok(None)
+                    }
                 } else {
                     Err(self.throw_error(ctx, "Invalid operand for CallMethod"))
                 }
@@ -1639,6 +1713,48 @@ impl VM {
                     Ok(None)
                 } else {
                     Err(self.throw_error(ctx, "Invalid operand for GetField8"))
+                }
+            }
+
+            PutField8 => {
+                if let Operand::Atom8(atom_idx) = instruction.operand {
+                    // Pop value, then object from stack
+                    let value = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    let obj = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Get property atom
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
+
+                    // Set property on object
+                    ctx.add_property(obj, atom, value, crate::object::PropertyFlags::default())
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PutField8"))
+                }
+            }
+
+            PutField => {
+                if let Operand::U16(atom_idx) = instruction.operand {
+                    // Pop value, then object from stack
+                    let value = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    let obj = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Get property atom
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
+
+                    // Set property on object
+                    ctx.add_property(obj, atom, value, crate::object::PropertyFlags::default())
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PutField"))
                 }
             }
 
@@ -1989,7 +2105,7 @@ impl VM {
         conversion::to_boolean(ctx, val)
     }
 
-    fn typeof_value(&self, val: JSValue) -> &'static str {
+    fn typeof_value(&self, ctx: &Context, val: JSValue) -> &'static str {
         if val.is_undefined() {
             "undefined"
         } else if val.is_null() {
@@ -1999,7 +2115,23 @@ impl VM {
         } else if val.is_int() {
             "number"
         } else if val.is_ptr() {
-            "object" // Simplified - would need to check actual type
+            // Check memory tag for function types
+            if let Some(index) = val.to_ptr() {
+                use crate::memory::MemTag;
+                unsafe {
+                    let header = ctx.arena().get_header(index);
+                    match header.mtag() {
+                        MemTag::CFunctionData | MemTag::ClosureData | MemTag::FunctionBytecode => {
+                            return "function";
+                        }
+                        MemTag::String => {
+                            return "string";
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "object"
         } else {
             "undefined"
         }
