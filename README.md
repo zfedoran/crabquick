@@ -14,12 +14,6 @@ CrabQuick is a from-scratch port of [MicroQuickJS](https://github.com/bellard/mq
 
 Core engine functional with 300+ passing tests
 
-Remaining work:
-  1. For-loop + increment - The combination causes infinite loops
-  2. Increment/decrement operators - Variable updates not working
-  3. Array.length - Empty array length not working
-  4. Object methods - Blocked by function expressions feature
-
 Summary
 
 The engine is ~80% complete:
