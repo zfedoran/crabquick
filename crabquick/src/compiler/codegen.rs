@@ -1487,8 +1487,10 @@ impl CodeGenerator {
                         self.emit_simple(Opcode::Undefined);
                     }
 
-                    // Store: [arr, index, value] -> [arr]
+                    // Store: [arr, arr_dup, index, value] -> [arr, arr_dup]
+                    // PutArrayEl peeks obj (doesn't pop), so we need to drop the dup'd copy
                     self.emit_simple(Opcode::PutArrayEl);
+                    self.emit_simple(Opcode::Drop); // Remove the dup'd array copy
                 }
 
                 Ok(())
