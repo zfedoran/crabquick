@@ -173,8 +173,9 @@ pub struct CodeGenerator {
     /// Variables captured from parent (when compiling a closure)
     captured_vars: Vec<CapturedVar>,
     /// Parent scope for closure variable lookup (reference to outer CodeGenerator's scope)
-    /// This is a flat list of accessible outer variables with their original indices
-    outer_vars: Vec<(String, u8)>,
+    /// This is a flat list of accessible outer variables: (name, parent_index, from_capture)
+    /// from_capture = true means it's from parent's captured vars, false means parent's locals
+    outer_vars: Vec<(String, u8, bool)>,
     /// Is this a closure (has access to outer scope)?
     is_closure: bool,
 }
@@ -199,7 +200,7 @@ impl CodeGenerator {
     }
 
     /// Creates a new code generator for a closure with access to outer variables
-    fn new_for_closure(outer_vars: Vec<(String, u8)>) -> Self {
+    fn new_for_closure(outer_vars: Vec<(String, u8, bool)>) -> Self {
         CodeGenerator {
             writer: BytecodeWriter::new(),
             constants: ConstantPool::new(),
@@ -247,14 +248,14 @@ impl CodeGenerator {
             }
 
             // Check if available in outer scope
-            for (outer_name, outer_index) in &self.outer_vars {
+            for (outer_name, outer_index, from_capture) in &self.outer_vars {
                 if outer_name == name {
                     // Add to captured vars
                     let capture_index = self.captured_vars.len() as u8;
                     self.captured_vars.push(CapturedVar {
                         name: name.to_string(),
                         parent_index: *outer_index,
-                        from_capture: false, // TODO: track if parent is also a closure
+                        from_capture: *from_capture,
                     });
                     return VarLocation::Captured(capture_index);
                 }
@@ -339,9 +340,41 @@ impl CodeGenerator {
     /// compiles the function body, and returns the complete bytecode plus local count
     /// and captured variables.
     fn compile_function_body(&mut self, params: &[String], body: &[Stmt]) -> CodeGenResult<(Vec<u8>, u8, Vec<CapturedVar>)> {
-        // Collect current scope bindings to make accessible to the function
+        // First, pre-analyze the body to find all referenced variables
+        // This ensures we capture any variables needed by nested functions
+        let referenced_vars = self.collect_referenced_vars(body);
+
+        // Force-capture any referenced vars that are in our outer_vars but not yet captured
+        for var_name in &referenced_vars {
+            // Skip if already in local scope
+            if self.scope.find_binding(var_name).is_some() {
+                continue;
+            }
+            // Skip if already captured
+            if self.captured_vars.iter().any(|cv| &cv.name == var_name) {
+                continue;
+            }
+            // Check if it's in our outer_vars and force-capture it
+            for (outer_name, outer_index, from_capture) in &self.outer_vars {
+                if outer_name == var_name {
+                    self.captured_vars.push(CapturedVar {
+                        name: var_name.clone(),
+                        parent_index: *outer_index,
+                        from_capture: *from_capture,
+                    });
+                    break;
+                }
+            }
+        }
+
+        // Now collect scope bindings and captured vars for the nested function
         let mut outer_vars = Vec::new();
         self.collect_scope_vars(&self.scope.clone(), &mut outer_vars);
+
+        // Include our captured vars so nested functions can access them
+        for (i, cv) in self.captured_vars.iter().enumerate() {
+            outer_vars.push((cv.name.clone(), i as u8, true));
+        }
 
         // Create a new code generator for the function with access to outer vars
         let mut func_gen = CodeGenerator::new_for_closure(outer_vars);
@@ -384,12 +417,199 @@ impl CodeGenerator {
     }
 
     /// Collects all variable bindings from a scope hierarchy
-    fn collect_scope_vars(&self, scope: &Scope, vars: &mut Vec<(String, u8)>) {
+    /// Returns (name, index, from_capture) where from_capture is always false for locals
+    fn collect_scope_vars(&self, scope: &Scope, vars: &mut Vec<(String, u8, bool)>) {
         for binding in &scope.bindings {
-            vars.push((binding.name.clone(), binding.index));
+            vars.push((binding.name.clone(), binding.index, false));
         }
         if let Some(ref parent) = scope.parent {
             self.collect_scope_vars(parent, vars);
+        }
+    }
+
+    /// Collects all variable names referenced in a list of statements
+    /// This traverses the AST to find all Identifier expressions
+    fn collect_referenced_vars(&self, stmts: &[Stmt]) -> Vec<String> {
+        let mut vars = Vec::new();
+        for stmt in stmts {
+            self.collect_vars_in_stmt(stmt, &mut vars);
+        }
+        vars
+    }
+
+    fn collect_vars_in_stmt(&self, stmt: &Stmt, vars: &mut Vec<String>) {
+        match stmt {
+            Stmt::Expression { expr, .. } => self.collect_vars_in_expr(expr, vars),
+            Stmt::VarDecl { declarations, .. } => {
+                for decl in declarations {
+                    if let Some(ref init) = decl.init {
+                        self.collect_vars_in_expr(init, vars);
+                    }
+                }
+            }
+            Stmt::If { test, consequent, alternate, .. } => {
+                self.collect_vars_in_expr(test, vars);
+                self.collect_vars_in_stmt(consequent, vars);
+                if let Some(alt) = alternate {
+                    self.collect_vars_in_stmt(alt, vars);
+                }
+            }
+            Stmt::While { test, body, .. } => {
+                self.collect_vars_in_expr(test, vars);
+                self.collect_vars_in_stmt(body, vars);
+            }
+            Stmt::DoWhile { body, test, .. } => {
+                self.collect_vars_in_stmt(body, vars);
+                self.collect_vars_in_expr(test, vars);
+            }
+            Stmt::For { init, test, update, body, .. } => {
+                if let Some(init) = init {
+                    match init {
+                        ForInit::VarDecl { declarations, .. } => {
+                            for decl in declarations {
+                                if let Some(ref init_expr) = decl.init {
+                                    self.collect_vars_in_expr(init_expr, vars);
+                                }
+                            }
+                        }
+                        ForInit::Expr(expr) => self.collect_vars_in_expr(expr, vars),
+                    }
+                }
+                if let Some(test) = test {
+                    self.collect_vars_in_expr(test, vars);
+                }
+                if let Some(update) = update {
+                    self.collect_vars_in_expr(update, vars);
+                }
+                self.collect_vars_in_stmt(body, vars);
+            }
+            Stmt::ForIn { right, body, .. } => {
+                self.collect_vars_in_expr(right, vars);
+                self.collect_vars_in_stmt(body, vars);
+            }
+            Stmt::Block { stmts, .. } => {
+                for s in stmts {
+                    self.collect_vars_in_stmt(s, vars);
+                }
+            }
+            Stmt::Return { argument, .. } => {
+                if let Some(arg) = argument {
+                    self.collect_vars_in_expr(arg, vars);
+                }
+            }
+            Stmt::Throw { argument, .. } => {
+                self.collect_vars_in_expr(argument, vars);
+            }
+            Stmt::Try { block, handler, finalizer, .. } => {
+                for s in block {
+                    self.collect_vars_in_stmt(s, vars);
+                }
+                if let Some(catch_clause) = handler {
+                    for s in &catch_clause.body {
+                        self.collect_vars_in_stmt(s, vars);
+                    }
+                }
+                if let Some(fin) = finalizer {
+                    for s in fin {
+                        self.collect_vars_in_stmt(s, vars);
+                    }
+                }
+            }
+            Stmt::Switch { discriminant, cases, .. } => {
+                self.collect_vars_in_expr(discriminant, vars);
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        self.collect_vars_in_expr(test, vars);
+                    }
+                    for s in &case.consequent {
+                        self.collect_vars_in_stmt(s, vars);
+                    }
+                }
+            }
+            Stmt::FunctionDecl { body, .. } => {
+                // Recurse into nested functions to find vars they reference
+                for s in body {
+                    self.collect_vars_in_stmt(s, vars);
+                }
+            }
+            Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Empty { .. } => {}
+        }
+    }
+
+    fn collect_vars_in_expr(&self, expr: &Expr, vars: &mut Vec<String>) {
+        match expr {
+            Expr::Identifier(name, _) => {
+                if !vars.contains(name) {
+                    vars.push(name.clone());
+                }
+            }
+            Expr::Binary { left, right, .. } |
+            Expr::Assignment { left, right, .. } => {
+                self.collect_vars_in_expr(left, vars);
+                self.collect_vars_in_expr(right, vars);
+            }
+            Expr::Unary { arg, .. } |
+            Expr::Update { arg, .. } => {
+                self.collect_vars_in_expr(arg, vars);
+            }
+            Expr::Conditional { test, consequent, alternate, .. } => {
+                self.collect_vars_in_expr(test, vars);
+                self.collect_vars_in_expr(consequent, vars);
+                self.collect_vars_in_expr(alternate, vars);
+            }
+            Expr::Call { callee, args, .. } => {
+                self.collect_vars_in_expr(callee, vars);
+                for arg in args {
+                    self.collect_vars_in_expr(arg, vars);
+                }
+            }
+            Expr::Member { object, property, computed, .. } => {
+                self.collect_vars_in_expr(object, vars);
+                if *computed {
+                    self.collect_vars_in_expr(property, vars);
+                }
+            }
+            Expr::Array { elements, .. } => {
+                for elem in elements {
+                    if let Some(e) = elem {
+                        self.collect_vars_in_expr(e, vars);
+                    }
+                }
+            }
+            Expr::Object { properties, .. } => {
+                for prop in properties {
+                    self.collect_vars_in_expr(&prop.value, vars);
+                }
+            }
+            Expr::Function { body, .. } => {
+                // Recurse into nested function expressions
+                for s in body {
+                    self.collect_vars_in_stmt(s, vars);
+                }
+            }
+            Expr::Arrow { body, .. } => {
+                match body {
+                    ArrowBody::Expr(e) => self.collect_vars_in_expr(e, vars),
+                    ArrowBody::Block(stmts) => {
+                        for s in stmts {
+                            self.collect_vars_in_stmt(s, vars);
+                        }
+                    }
+                }
+            }
+            Expr::Sequence { exprs, .. } => {
+                for e in exprs {
+                    self.collect_vars_in_expr(e, vars);
+                }
+            }
+            Expr::New { callee, args, .. } => {
+                self.collect_vars_in_expr(callee, vars);
+                for arg in args {
+                    self.collect_vars_in_expr(arg, vars);
+                }
+            }
+            // Literals don't reference variables
+            Expr::Literal(_, _) | Expr::This(_) => {}
         }
     }
 
@@ -566,11 +786,17 @@ impl CodeGenerator {
 
                 if has_captures {
                     // Emit FClosure which creates a closure with captured variables
-                    // Format: FClosure func_idx, captured_count, [local_idx...]
+                    // Format: FClosure func_idx, captured_count, [capture_info...]
+                    // capture_info: high bit = from_capture, low 7 bits = parent_index
                     self.emit(Instruction::with_u8(Opcode::FClosure, func_index as u8));
                     self.writer.emit_u8(captured_vars.len() as u8);
                     for cv in &captured_vars {
-                        self.writer.emit_u8(cv.parent_index);
+                        let capture_byte = if cv.from_capture {
+                            cv.parent_index | 0x80  // Set high bit for from_capture
+                        } else {
+                            cv.parent_index
+                        };
+                        self.writer.emit_u8(capture_byte);
                     }
                 } else {
                     // No captures - emit regular PushFunc
@@ -1319,10 +1545,17 @@ impl CodeGenerator {
 
                 if has_captures {
                     // Emit FClosure which creates a closure with captured variables
+                    // Format: FClosure func_idx, captured_count, [capture_info...]
+                    // capture_info: high bit = from_capture, low 7 bits = parent_index
                     self.emit(Instruction::with_u8(Opcode::FClosure, func_index as u8));
                     self.writer.emit_u8(captured_vars.len() as u8);
                     for cv in &captured_vars {
-                        self.writer.emit_u8(cv.parent_index);
+                        let capture_byte = if cv.from_capture {
+                            cv.parent_index | 0x80  // Set high bit for from_capture
+                        } else {
+                            cv.parent_index
+                        };
+                        self.writer.emit_u8(capture_byte);
                     }
                 } else {
                     // No captures - emit regular PushFunc

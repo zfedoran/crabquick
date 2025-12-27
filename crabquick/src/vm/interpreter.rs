@@ -37,6 +37,9 @@ pub struct VM {
     atom_table: Vec<String>,
     /// Function table (precompiled functions)
     function_table: Vec<FunctionEntry>,
+    /// Promoted var_refs for current frame: (frame_sp, local_slot) -> var_ref_idx
+    /// This ensures multiple closures share the same var_ref for the same captured variable
+    promoted_var_refs: Vec<(usize, usize, HeapIndex)>,
 }
 
 /// VM execution result
@@ -72,6 +75,7 @@ impl VM {
             const_is_f64: Vec::new(),
             atom_table: Vec::new(),
             function_table: Vec::new(),
+            promoted_var_refs: Vec::new(),
         }
     }
 
@@ -640,8 +644,11 @@ impl VM {
                     let mut var_refs = alloc::vec::Vec::with_capacity(captured_count);
 
                     for _ in 0..captured_count {
-                        // Read the capture source info (local index to capture)
-                        let local_idx = reader.read_u8().unwrap_or(0) as usize;
+                        // Read the capture source info
+                        // High bit = from_capture, low 7 bits = parent_index
+                        let capture_byte = reader.read_u8().unwrap_or(0);
+                        let from_capture = (capture_byte & 0x80) != 0;
+                        let parent_idx = (capture_byte & 0x7F) as usize;
 
                         // Get the current call frame info (avoiding borrow issues)
                         let (base_sp, parent_closure_opt) = match self.call_stack.current() {
@@ -649,39 +656,44 @@ impl VM {
                             Err(_) => return Err(self.throw_error(ctx, "No call frame")),
                         };
 
-                        // Check if we're in a closure context with existing var refs
-                        if let Some(parent_closure_idx) = parent_closure_opt {
-                            // Get parent closure info
-                            let reused_var_ref = match ctx.get_closure(parent_closure_idx) {
-                                Some(parent_closure) => {
-                                    if local_idx < parent_closure.var_ref_count as usize {
-                                        Some(parent_closure.get_var_ref(local_idx))
-                                    } else {
-                                        None
+                        if from_capture {
+                            // Capture from parent's captured vars (reuse existing var ref)
+                            if let Some(parent_closure_idx) = parent_closure_opt {
+                                match ctx.get_closure(parent_closure_idx) {
+                                    Some(parent_closure) => {
+                                        if parent_idx < parent_closure.var_ref_count as usize {
+                                            var_refs.push(parent_closure.get_var_ref(parent_idx));
+                                        } else {
+                                            return Err(self.throw_error(ctx, "Invalid capture index"));
+                                        }
                                     }
+                                    None => return Err(self.throw_error(ctx, "Invalid parent closure")),
                                 }
-                                None => return Err(self.throw_error(ctx, "Invalid parent closure")),
-                            };
-
-                            if let Some(existing_ref) = reused_var_ref {
-                                // Reuse the var ref from parent
-                                var_refs.push(existing_ref);
                             } else {
-                                // It's a local variable - create new var ref
-                                let local_val = self.value_stack.get(base_sp + local_idx)
-                                    .unwrap_or(JSValue::undefined());
-                                match ctx.alloc_var_ref(local_val) {
-                                    Ok(var_ref_idx) => var_refs.push(var_ref_idx),
-                                    Err(_) => return Err(self.throw_error(ctx, "Out of memory")),
-                                }
+                                return Err(self.throw_error(ctx, "from_capture without parent closure"));
                             }
                         } else {
-                            // Not in a closure - capture from local stack
-                            let local_val = self.value_stack.get(base_sp + local_idx)
-                                .unwrap_or(JSValue::undefined());
-                            match ctx.alloc_var_ref(local_val) {
-                                Ok(var_ref_idx) => var_refs.push(var_ref_idx),
-                                Err(_) => return Err(self.throw_error(ctx, "Out of memory")),
+                            // Capture from local stack
+                            // Check if we already have a var_ref for this local (shared capture)
+                            let existing = self.promoted_var_refs.iter()
+                                .find(|(sp, slot, _)| *sp == base_sp && *slot == parent_idx)
+                                .map(|(_, _, idx)| *idx);
+
+                            if let Some(existing_var_ref) = existing {
+                                // Reuse existing var_ref (multiple closures sharing same variable)
+                                var_refs.push(existing_var_ref);
+                            } else {
+                                // Create new var ref for this local
+                                let local_val = self.value_stack.get(base_sp + parent_idx)
+                                    .unwrap_or(JSValue::undefined());
+                                match ctx.alloc_var_ref(local_val) {
+                                    Ok(var_ref_idx) => {
+                                        // Remember this promotion so other closures can share it
+                                        self.promoted_var_refs.push((base_sp, parent_idx, var_ref_idx));
+                                        var_refs.push(var_ref_idx);
+                                    }
+                                    Err(_) => return Err(self.throw_error(ctx, "Out of memory")),
+                                }
                             }
                         }
                     }
@@ -2447,6 +2459,9 @@ impl VM {
 
         // Execute the actual code
         let result = self.execute_function_code(ctx, reader, base_sp, closure);
+
+        // Clean up promoted var_refs for this frame to prevent stale reuse
+        self.promoted_var_refs.retain(|(sp, _, _)| *sp != base_sp);
 
         // Restore the old tables
         self.constants = old_constants;
