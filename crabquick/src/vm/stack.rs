@@ -208,6 +208,9 @@ pub struct StackFrame {
     pub this: JSValue,
     /// Previous exception handler PC (for try/catch)
     pub catch_offset: Option<usize>,
+    /// Closure object (if this is a closure call)
+    /// This HeapIndex points to a JSClosure object containing captured variable references
+    pub closure: Option<crate::memory::HeapIndex>,
 }
 
 impl StackFrame {
@@ -220,6 +223,20 @@ impl StackFrame {
             argc,
             this,
             catch_offset: None,
+            closure: None,
+        }
+    }
+
+    /// Creates a new stack frame for a closure call
+    pub fn new_closure(func: JSValue, sp: usize, argc: u16, this: JSValue, closure: crate::memory::HeapIndex) -> Self {
+        StackFrame {
+            func,
+            pc: 0,
+            sp,
+            argc,
+            this,
+            catch_offset: None,
+            closure: Some(closure),
         }
     }
 

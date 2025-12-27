@@ -82,61 +82,103 @@ impl Default for JSFunction {
     }
 }
 
-/// Closure data
+/// Variable reference for closures
+///
+/// Stored on heap with MemTag::VarRef. Contains a captured variable value
+/// that can be shared between the creating function and any closures that
+/// capture it.
+#[repr(C)]
+pub struct JSVarRef {
+    /// The captured value (always detached - stored on heap)
+    value: JSValue,
+}
+
+impl JSVarRef {
+    /// Creates a new variable reference with the given value
+    pub fn new(value: JSValue) -> Self {
+        JSVarRef { value }
+    }
+
+    /// Returns the captured value
+    pub fn value(&self) -> JSValue {
+        self.value
+    }
+
+    /// Sets the captured value
+    pub fn set_value(&mut self, value: JSValue) {
+        self.value = value;
+    }
+}
+
+impl Default for JSVarRef {
+    fn default() -> Self {
+        Self::new(JSValue::undefined())
+    }
+}
+
+/// Closure object - a function plus its captured environment
+///
+/// Stored on heap with MemTag::ClosureData. Contains a reference to the
+/// underlying bytecode function plus an array of HeapIndex values pointing
+/// to JSVarRef objects for each captured variable.
+#[repr(C)]
 pub struct JSClosure {
-    // TODO: Implement fields:
-    // - func_bytecode: JSValue (JSFunction index)
-    // - var_refs: HeapIndex (array of JSVarRef)
-    _placeholder: u8,
+    /// Index to the bytecode function in the function table
+    pub func_index: u16,
+    /// Number of captured variables
+    pub var_ref_count: u8,
+    /// Reserved for alignment
+    pub reserved: u8,
+    // Followed by: [HeapIndex; var_ref_count] - the var_refs array
 }
 
 impl JSClosure {
-    /// Creates a new closure
-    pub fn new() -> Self {
-        JSClosure {
-            _placeholder: 0,
+    /// Returns the size needed for a closure with N var refs
+    pub fn alloc_size(var_ref_count: usize) -> usize {
+        core::mem::size_of::<JSClosure>()
+            + var_ref_count * core::mem::size_of::<crate::memory::HeapIndex>()
+    }
+
+    /// Gets a pointer to the var_refs array
+    ///
+    /// # Safety
+    /// Caller must ensure the closure was allocated with enough space
+    pub unsafe fn var_refs_ptr(&self) -> *const crate::memory::HeapIndex {
+        (self as *const Self).add(1) as *const crate::memory::HeapIndex
+    }
+
+    /// Gets a mutable pointer to the var_refs array
+    ///
+    /// # Safety
+    /// Caller must ensure the closure was allocated with enough space
+    pub unsafe fn var_refs_ptr_mut(&mut self) -> *mut crate::memory::HeapIndex {
+        (self as *mut Self).add(1) as *mut crate::memory::HeapIndex
+    }
+
+    /// Gets the HeapIndex for a captured variable
+    pub fn get_var_ref(&self, idx: usize) -> crate::memory::HeapIndex {
+        assert!(idx < self.var_ref_count as usize);
+        unsafe {
+            *self.var_refs_ptr().add(idx)
+        }
+    }
+
+    /// Sets the HeapIndex for a captured variable
+    pub fn set_var_ref(&mut self, idx: usize, heap_idx: crate::memory::HeapIndex) {
+        assert!(idx < self.var_ref_count as usize);
+        unsafe {
+            *self.var_refs_ptr_mut().add(idx) = heap_idx;
         }
     }
 }
 
 impl Default for JSClosure {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Variable reference for closures
-pub struct JSVarRef {
-    // TODO: Implement fields:
-    // - is_detached: bool
-    // - value: JSValue (if detached)
-    // - pvalue: *mut JSValue (if attached to stack)
-    _placeholder: u8,
-}
-
-impl JSVarRef {
-    /// Creates a new variable reference
-    pub fn new() -> Self {
-        JSVarRef {
-            _placeholder: 0,
+        JSClosure {
+            func_index: 0,
+            var_ref_count: 0,
+            reserved: 0,
         }
-    }
-
-    /// Returns the value
-    pub fn value(&self) -> JSValue {
-        // TODO: Return value or *pvalue
-        JSValue::undefined()
-    }
-
-    /// Sets the value
-    pub fn set_value(&mut self, _value: JSValue) {
-        // TODO: Set value or *pvalue
-    }
-}
-
-impl Default for JSVarRef {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

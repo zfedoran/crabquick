@@ -836,6 +836,130 @@ impl Context {
             Some(self.arena.get(index))
         }
     }
+
+    // ========== Closure Operations ==========
+
+    /// Allocates a JSVarRef on the heap
+    ///
+    /// A VarRef holds a captured variable value that can be shared between
+    /// the enclosing function and any closures that capture it.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The initial value for the variable reference
+    ///
+    /// # Returns
+    ///
+    /// The HeapIndex of the allocated VarRef
+    pub fn alloc_var_ref(&mut self, value: JSValue) -> Result<HeapIndex, crate::memory::allocator::OutOfMemory> {
+        use crate::object::function::JSVarRef;
+
+        let total_size = core::mem::size_of::<crate::memory::MemBlockHeader>()
+            + core::mem::size_of::<JSVarRef>();
+
+        let index = unsafe { self.alloc_raw(total_size, MemTag::VarRef)? };
+
+        unsafe {
+            let var_ref: &mut JSVarRef = self.arena.get_mut(index);
+            *var_ref = JSVarRef::new(value);
+        }
+
+        Ok(index)
+    }
+
+    /// Gets a reference to a VarRef
+    pub fn get_var_ref(&self, index: HeapIndex) -> Option<&crate::object::function::JSVarRef> {
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::VarRef {
+                return None;
+            }
+            Some(self.arena.get(index))
+        }
+    }
+
+    /// Gets a mutable reference to a VarRef
+    pub fn get_var_ref_mut(&mut self, index: HeapIndex) -> Option<&mut crate::object::function::JSVarRef> {
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::VarRef {
+                return None;
+            }
+            Some(self.arena.get_mut(index))
+        }
+    }
+
+    /// Allocates a JSClosure on the heap
+    ///
+    /// A closure combines a function index with captured variable references.
+    ///
+    /// # Arguments
+    ///
+    /// * `func_index` - Index into the function table
+    /// * `var_refs` - Array of HeapIndex values pointing to JSVarRef objects
+    ///
+    /// # Returns
+    ///
+    /// The HeapIndex of the allocated closure
+    pub fn alloc_closure(
+        &mut self,
+        func_index: u16,
+        var_refs: &[HeapIndex],
+    ) -> Result<HeapIndex, crate::memory::allocator::OutOfMemory> {
+        use crate::object::function::JSClosure;
+
+        let total_size = core::mem::size_of::<crate::memory::MemBlockHeader>()
+            + JSClosure::alloc_size(var_refs.len());
+
+        let index = unsafe { self.alloc_raw(total_size, MemTag::ClosureData)? };
+
+        unsafe {
+            let closure: &mut JSClosure = self.arena.get_mut(index);
+            closure.func_index = func_index;
+            closure.var_ref_count = var_refs.len() as u8;
+            closure.reserved = 0;
+
+            for (i, &vr_idx) in var_refs.iter().enumerate() {
+                closure.set_var_ref(i, vr_idx);
+            }
+        }
+
+        Ok(index)
+    }
+
+    /// Gets a reference to a closure
+    pub fn get_closure(&self, index: HeapIndex) -> Option<&crate::object::function::JSClosure> {
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::ClosureData {
+                return None;
+            }
+            Some(self.arena.get(index))
+        }
+    }
+
+    /// Gets a mutable reference to a closure
+    pub fn get_closure_mut(&mut self, index: HeapIndex) -> Option<&mut crate::object::function::JSClosure> {
+        unsafe {
+            let header = self.arena.get_header(index);
+            if header.mtag() != MemTag::ClosureData {
+                return None;
+            }
+            Some(self.arena.get_mut(index))
+        }
+    }
+
+    /// Checks if a value is a closure
+    pub fn is_closure(&self, val: JSValue) -> bool {
+        if let Some(index) = val.to_ptr() {
+            unsafe {
+                let header = self.arena.get_header(index);
+                header.mtag() == MemTag::ClosureData
+            }
+        } else {
+            false
+        }
+    }
 }
 
 impl Drop for Context {

@@ -190,10 +190,25 @@ impl GarbageCollector {
                     // TODO: Mark function bytecode references when implemented
                 }
                 MemTag::ClosureData => {
-                    // TODO: Mark closure variable references when implemented
+                    // Scan closure - mark all captured variable references
+                    let closure: &crate::object::function::JSClosure = arena.get(index);
+                    let var_ref_count = closure.var_ref_count as usize;
+
+                    // Collect var ref indices first to avoid borrow conflicts
+                    let var_refs: Vec<HeapIndex> = (0..var_ref_count)
+                        .map(|i| closure.get_var_ref(i))
+                        .collect();
+
+                    // Mark all var refs
+                    for vr_idx in var_refs {
+                        self.mark_object(vr_idx, arena);
+                    }
                 }
                 MemTag::VarRef => {
-                    // TODO: Mark variable reference value when implemented
+                    // Scan var ref - mark the contained value
+                    let var_ref: &crate::object::function::JSVarRef = arena.get(index);
+                    let value = var_ref.value();
+                    self.mark_value(value, arena);
                 }
                 MemTag::CFunctionData => {
                     // C functions don't have GC references
