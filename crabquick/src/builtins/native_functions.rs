@@ -441,6 +441,86 @@ pub fn string_trim_native(ctx: &mut Context, this: JSValue, _args: &[JSValue]) -
     string::trim(ctx, this)
 }
 
+/// String.prototype.trimStart() wrapper
+pub fn string_trim_start_native(ctx: &mut Context, this: JSValue, _args: &[JSValue]) -> Result<JSValue, JSValue> {
+    string::trim_start(ctx, this)
+}
+
+/// String.prototype.trimEnd() wrapper
+pub fn string_trim_end_native(ctx: &mut Context, this: JSValue, _args: &[JSValue]) -> Result<JSValue, JSValue> {
+    string::trim_end(ctx, this)
+}
+
+/// String.prototype.replace() wrapper
+pub fn string_replace_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let search = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let replace_val = args.get(1).copied().unwrap_or(JSValue::undefined());
+    string::replace(ctx, this, search, replace_val)
+}
+
+/// String.prototype.replaceAll() wrapper
+pub fn string_replace_all_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let search = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let replace_val = args.get(1).copied().unwrap_or(JSValue::undefined());
+    string::replace_all(ctx, this, search, replace_val)
+}
+
+/// String.prototype.includes() wrapper
+pub fn string_includes_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::conversion::to_int32;
+
+    let search = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let position = args.get(1).map(|v| to_int32(ctx, *v));
+
+    let result = string::includes(ctx, this, search, position)?;
+    Ok(JSValue::bool(result))
+}
+
+/// String.prototype.startsWith() wrapper
+pub fn string_starts_with_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::conversion::to_int32;
+
+    let search = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let position = args.get(1).map(|v| to_int32(ctx, *v));
+
+    let result = string::starts_with(ctx, this, search, position)?;
+    Ok(JSValue::bool(result))
+}
+
+/// String.prototype.endsWith() wrapper
+pub fn string_ends_with_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::conversion::to_int32;
+
+    let search = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let length = args.get(1).map(|v| to_int32(ctx, *v));
+
+    let result = string::ends_with(ctx, this, search, length)?;
+    Ok(JSValue::bool(result))
+}
+
+/// String.prototype.concat() wrapper
+pub fn string_concat_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    string::concat(ctx, this, args)
+}
+
+/// String.prototype.codePointAt() wrapper
+pub fn string_code_point_at_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::conversion::to_int32;
+
+    let index = args.get(0).map(|v| to_int32(ctx, *v)).unwrap_or(0);
+    string::code_point_at(ctx, this, index)
+}
+
+/// String.fromCharCode() wrapper
+pub fn string_from_char_code_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    string::from_char_code(ctx, args)
+}
+
+/// String.fromCodePoint() wrapper
+pub fn string_from_code_point_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    string::from_code_point(ctx, args)
+}
+
 // ========== Object Static Methods ==========
 
 /// Object.keys() wrapper

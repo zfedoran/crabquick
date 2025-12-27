@@ -180,11 +180,19 @@ pub fn trim(ctx: &mut Context, str_val: JSValue) -> Result<JSValue, JSValue> {
 ///
 /// Simplified implementation
 pub fn split(ctx: &mut Context, str_val: JSValue, separator: Option<JSValue>, limit: Option<i32>) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+    use crate::object::PropertyFlags;
+
     let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
 
     let parts: Vec<String> = if let Some(sep) = separator {
         if let Some(sep_str) = ctx.get_string(sep) {
-            s.split(sep_str).map(|p: &str| p.to_string()).collect()
+            if sep_str.is_empty() {
+                // Split into individual characters
+                s.chars().map(|c| c.to_string()).collect()
+            } else {
+                s.split(sep_str).map(|p: &str| p.to_string()).collect()
+            }
         } else {
             vec![s.clone()]
         }
@@ -195,21 +203,36 @@ pub fn split(ctx: &mut Context, str_val: JSValue, separator: Option<JSValue>, li
     let limit = limit.unwrap_or(i32::MAX) as usize;
     let parts: Vec<String> = parts.into_iter().take(limit).collect();
 
-    // Create array of strings
-    let mut arr_elements = Vec::new();
-    for part in parts {
-        let part_val = ctx.new_string(&part).map_err(|_| JSValue::exception())?;
-        arr_elements.push(part_val);
-    }
+    // Create a proper JS array object with Array.prototype
+    let result = ctx.new_object().map_err(|_| JSValue::exception())?;
 
-    let arr_idx = ctx.alloc_value_array(arr_elements.len()).map_err(|_| JSValue::exception())?;
-    if let Some(arr) = ctx.get_value_array_mut(arr_idx) {
-        for elem in arr_elements {
-            unsafe { arr.push(elem); }
+    // Set Array.prototype
+    let array_atom = string_to_atom("Array");
+    let proto_atom = string_to_atom("prototype");
+    if let Some(array_ctor) = ctx.get_global_property(array_atom) {
+        if let Some(array_proto) = ctx.get_property(array_ctor, proto_atom) {
+            if let Some(obj) = ctx.get_object_mut(result) {
+                obj.set_prototype(array_proto);
+            }
         }
     }
 
-    Ok(JSValue::from_ptr(arr_idx))
+    // Add each part as a numbered property
+    for (i, part) in parts.iter().enumerate() {
+        let part_val = ctx.new_string(part).map_err(|_| JSValue::exception())?;
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+        ctx.add_property(result, idx_atom, part_val, PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    // Set length
+    let length_atom = string_to_atom("length");
+    let length_val = JSValue::from_int(parts.len() as i32);
+    ctx.add_property(result, length_atom, length_val, PropertyFlags::default())
+        .map_err(|_| JSValue::exception())?;
+
+    Ok(result)
 }
 
 /// String.prototype.replace() - Replaces first occurrence
@@ -260,6 +283,117 @@ pub fn ends_with(ctx: &Context, str_val: JSValue, search: JSValue, length: Optio
     let end = length.map(|l| (l as usize).min(s.len())).unwrap_or(s.len());
 
     Ok(s[..end].ends_with(search_str))
+}
+
+/// String.prototype.trimStart() - Removes whitespace from beginning
+pub fn trim_start(ctx: &mut Context, str_val: JSValue) -> Result<JSValue, JSValue> {
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
+    let trimmed = s.trim_start();
+    ctx.new_string(trimmed).map_err(|_| JSValue::exception())
+}
+
+/// String.prototype.trimEnd() - Removes whitespace from end
+pub fn trim_end(ctx: &mut Context, str_val: JSValue) -> Result<JSValue, JSValue> {
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
+    let trimmed = s.trim_end();
+    ctx.new_string(trimmed).map_err(|_| JSValue::exception())
+}
+
+/// String.prototype.replaceAll() - Replaces all occurrences
+pub fn replace_all(ctx: &mut Context, str_val: JSValue, search: JSValue, replace_val: JSValue) -> Result<JSValue, JSValue> {
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?;
+    let search_str = ctx.get_string(search).ok_or(JSValue::exception())?;
+    let replace_str = ctx.get_string(replace_val).ok_or(JSValue::exception())?;
+
+    let result = s.replace(search_str, replace_str);
+    ctx.new_string(&result).map_err(|_| JSValue::exception())
+}
+
+/// String.prototype.concat() - Concatenates strings
+pub fn concat(ctx: &mut Context, str_val: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let mut result = ctx.get_string(str_val).ok_or(JSValue::exception())?.to_string();
+
+    for arg in args {
+        if let Some(s) = ctx.get_string(*arg) {
+            result.push_str(s);
+        } else if let Some(n) = ctx.get_number(*arg) {
+            result.push_str(&alloc::format!("{}", n));
+        } else if arg.is_null() {
+            result.push_str("null");
+        } else if arg.is_undefined() {
+            result.push_str("undefined");
+        } else if let Some(b) = arg.to_bool() {
+            result.push_str(if b { "true" } else { "false" });
+        } else {
+            result.push_str("[object Object]");
+        }
+    }
+
+    ctx.new_string(&result).map_err(|_| JSValue::exception())
+}
+
+/// String.prototype.codePointAt() - Returns code point at position
+pub fn code_point_at(ctx: &Context, str_val: JSValue, index: i32) -> Result<JSValue, JSValue> {
+    let s = ctx.get_string(str_val).ok_or(JSValue::exception())?;
+
+    if index < 0 {
+        return Ok(JSValue::undefined());
+    }
+
+    // Get character at index (UTF-16 code unit semantics)
+    let chars: Vec<char> = s.chars().collect();
+    if index as usize >= chars.len() {
+        return Ok(JSValue::undefined());
+    }
+
+    let ch = chars[index as usize];
+    Ok(JSValue::from_int(ch as i32))
+}
+
+/// String.fromCharCode() - Creates string from char codes
+pub fn from_char_code(ctx: &mut Context, codes: &[JSValue]) -> Result<JSValue, JSValue> {
+    let mut result = String::new();
+
+    for code in codes {
+        let code_val = if let Some(n) = ctx.get_number(*code) {
+            n as u32
+        } else if let Some(i) = code.to_int() {
+            i as u32
+        } else {
+            0
+        };
+
+        // Mask to 16 bits (UTF-16 code unit)
+        let code_unit = (code_val & 0xFFFF) as u16;
+        if let Some(ch) = char::from_u32(code_unit as u32) {
+            result.push(ch);
+        }
+    }
+
+    ctx.new_string(&result).map_err(|_| JSValue::exception())
+}
+
+/// String.fromCodePoint() - Creates string from code points
+pub fn from_code_point(ctx: &mut Context, codes: &[JSValue]) -> Result<JSValue, JSValue> {
+    let mut result = String::new();
+
+    for code in codes {
+        let code_val = if let Some(n) = ctx.get_number(*code) {
+            n as u32
+        } else if let Some(i) = code.to_int() {
+            i as u32
+        } else {
+            0
+        };
+
+        if let Some(ch) = char::from_u32(code_val) {
+            result.push(ch);
+        } else {
+            return Err(JSValue::exception()); // Invalid code point
+        }
+    }
+
+    ctx.new_string(&result).map_err(|_| JSValue::exception())
 }
 
 #[cfg(test)]

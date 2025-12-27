@@ -560,7 +560,40 @@ impl Context {
     /// Looks up a property in an object (including prototype chain)
     ///
     /// Returns the property value if found.
+    /// Also handles primitive strings by auto-boxing to String.prototype.
     pub fn get_property(
+        &self,
+        obj_val: JSValue,
+        key: crate::value::JSAtom,
+    ) -> Option<JSValue> {
+        // Handle string primitives
+        if let Some(s) = self.get_string(obj_val) {
+            // Check for "length" property
+            let length_atom = crate::runtime::init::string_to_atom("length");
+            if key.id() == length_atom.id() {
+                // Return string length (count UTF-16 code units like JS does)
+                let len = s.chars().count() as i32;
+                return Some(JSValue::from_int(len));
+            }
+
+            // Check for numeric index (string character access)
+            // This is handled elsewhere, so just look up String.prototype
+            let string_atom = crate::runtime::init::string_to_atom("String");
+            let prototype_atom = crate::runtime::init::string_to_atom("prototype");
+
+            if let Some(string_ctor) = self.get_global_property(string_atom) {
+                if let Some(string_proto) = self.get_property_internal(string_ctor, prototype_atom) {
+                    return self.get_property_internal(string_proto, key);
+                }
+            }
+            return None;
+        }
+
+        self.get_property_internal(obj_val, key)
+    }
+
+    /// Internal property lookup on objects only (no primitive handling)
+    fn get_property_internal(
         &self,
         obj_val: JSValue,
         key: crate::value::JSAtom,

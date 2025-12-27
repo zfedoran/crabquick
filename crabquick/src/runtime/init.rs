@@ -270,9 +270,54 @@ fn install_string_constructor(ctx: &mut Context, global: JSValue) -> Result<(), 
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, string_proto, "trim", trim_fn)?;
 
-    // Create String constructor (placeholder)
+    let trim_start_fn = ctx.new_native_function(native_functions::string_trim_start_native, 0)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_proto, "trimStart", trim_start_fn)?;
+
+    let trim_end_fn = ctx.new_native_function(native_functions::string_trim_end_native, 0)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_proto, "trimEnd", trim_end_fn)?;
+
+    let replace_fn = ctx.new_native_function(native_functions::string_replace_native, 2)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_proto, "replace", replace_fn)?;
+
+    let replace_all_fn = ctx.new_native_function(native_functions::string_replace_all_native, 2)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_proto, "replaceAll", replace_all_fn)?;
+
+    let includes_fn = ctx.new_native_function(native_functions::string_includes_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_proto, "includes", includes_fn)?;
+
+    let starts_with_fn = ctx.new_native_function(native_functions::string_starts_with_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_proto, "startsWith", starts_with_fn)?;
+
+    let ends_with_fn = ctx.new_native_function(native_functions::string_ends_with_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_proto, "endsWith", ends_with_fn)?;
+
+    let concat_fn = ctx.new_native_function(native_functions::string_concat_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_proto, "concat", concat_fn)?;
+
+    let code_point_at_fn = ctx.new_native_function(native_functions::string_code_point_at_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_proto, "codePointAt", code_point_at_fn)?;
+
+    // Create String constructor
     let string_ctor = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;
+
+    // Add static methods to String constructor
+    let from_char_code_fn = ctx.new_native_function(native_functions::string_from_char_code_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_ctor, "fromCharCode", from_char_code_fn)?;
+
+    let from_code_point_fn = ctx.new_native_function(native_functions::string_from_code_point_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, string_ctor, "fromCodePoint", from_code_point_fn)?;
 
     // Set String.prototype
     set_property(ctx, string_ctor, "prototype", string_proto)?;
