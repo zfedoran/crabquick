@@ -374,22 +374,73 @@ fn install_string_constructor(ctx: &mut Context, global: JSValue) -> Result<(), 
 
 /// Install Number constructor and Number.prototype
 fn install_number_constructor(ctx: &mut Context, global: JSValue) -> Result<(), JSValue> {
+    use crate::builtins::native_functions;
+
     // Create Number.prototype
     let number_proto = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;
 
-    // Create Number constructor (placeholder)
+    // Install Number.prototype methods
+    let to_fixed_fn = ctx.new_native_function(native_functions::number_to_fixed_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_proto, "toFixed", to_fixed_fn)?;
+
+    let to_string_fn = ctx.new_native_function(native_functions::number_to_string_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_proto, "toString", to_string_fn)?;
+
+    // Create Number constructor
     let number_ctor = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;
 
     // Set Number.prototype
     set_property(ctx, number_ctor, "prototype", number_proto)?;
 
+    // Install Number constants
+    let max_value = ctx.new_number(f64::MAX)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "MAX_VALUE", max_value)?;
+
+    let min_value = ctx.new_number(f64::MIN_POSITIVE)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "MIN_VALUE", min_value)?;
+
+    let nan_value = ctx.new_number(f64::NAN)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "NaN", nan_value)?;
+
+    let pos_inf = ctx.new_number(f64::INFINITY)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "POSITIVE_INFINITY", pos_inf)?;
+
+    let neg_inf = ctx.new_number(f64::NEG_INFINITY)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "NEGATIVE_INFINITY", neg_inf)?;
+
+    // Install Number static methods
+    let is_nan_fn = ctx.new_native_function(native_functions::number_is_nan_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "isNaN", is_nan_fn)?;
+
+    let is_finite_fn = ctx.new_native_function(native_functions::number_is_finite_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "isFinite", is_finite_fn)?;
+
+    let is_integer_fn = ctx.new_native_function(native_functions::number_is_integer_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "isInteger", is_integer_fn)?;
+
+    // Number.parseInt and Number.parseFloat (same as global)
+    let parse_int_fn = ctx.new_native_function(native_functions::parse_int_native, 2)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "parseInt", parse_int_fn)?;
+
+    let parse_float_fn = ctx.new_native_function(native_functions::parse_float_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, number_ctor, "parseFloat", parse_float_fn)?;
+
     // Set Number on global
     set_property(ctx, global, "Number", number_ctor)?;
-
-    // TODO: Install Number constants (MAX_VALUE, MIN_VALUE, etc.)
-    // TODO: Install Number.isNaN, Number.isFinite
 
     Ok(())
 }
@@ -581,17 +632,47 @@ fn install_console_object(ctx: &mut Context, global: JSValue) -> Result<(), JSVa
 
 /// Install global functions (parseInt, parseFloat, isNaN, isFinite)
 fn install_global_functions(ctx: &mut Context, global: JSValue) -> Result<(), JSValue> {
-    // TODO: Create native function objects for:
-    // - parseInt
-    // - parseFloat
-    // - isNaN
-    // - isFinite
-    // - eval
-    // - encodeURI / decodeURI
-    // - encodeURIComponent / decodeURIComponent
+    use crate::builtins::native_functions;
 
-    // For now, we just return Ok - these will be implemented later
-    // when we have proper native function support
+    // parseInt
+    let parse_int_fn = ctx.new_native_function(native_functions::parse_int_native, 2)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, global, "parseInt", parse_int_fn)?;
+
+    // parseFloat
+    let parse_float_fn = ctx.new_native_function(native_functions::parse_float_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, global, "parseFloat", parse_float_fn)?;
+
+    // isNaN
+    let is_nan_fn = ctx.new_native_function(native_functions::is_nan_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, global, "isNaN", is_nan_fn)?;
+
+    // isFinite
+    let is_finite_fn = ctx.new_native_function(native_functions::is_finite_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, global, "isFinite", is_finite_fn)?;
+
+    // encodeURI
+    let encode_uri_fn = ctx.new_native_function(native_functions::encode_uri_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, global, "encodeURI", encode_uri_fn)?;
+
+    // decodeURI
+    let decode_uri_fn = ctx.new_native_function(native_functions::decode_uri_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, global, "decodeURI", decode_uri_fn)?;
+
+    // encodeURIComponent
+    let encode_uri_comp_fn = ctx.new_native_function(native_functions::encode_uri_component_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, global, "encodeURIComponent", encode_uri_comp_fn)?;
+
+    // decodeURIComponent
+    let decode_uri_comp_fn = ctx.new_native_function(native_functions::decode_uri_component_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, global, "decodeURIComponent", decode_uri_comp_fn)?;
 
     Ok(())
 }

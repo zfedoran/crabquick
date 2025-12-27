@@ -6,7 +6,7 @@
 
 use crate::context::Context;
 use crate::value::JSValue;
-use crate::builtins::{math, console, array, string, object};
+use crate::builtins::{math, console, array, string, object, number};
 use alloc::string::ToString;
 
 // ========== Math Functions ==========
@@ -753,9 +753,92 @@ pub fn function_apply_native(ctx: &mut Context, this: JSValue, args: &[JSValue])
     ctx.call_function(this, this_arg, &call_args_vec)
 }
 
-/// Function.prototype.bind() wrapper (simplified - returns original function for now)
-pub fn function_bind_native(_ctx: &mut Context, this: JSValue, _args: &[JSValue]) -> Result<JSValue, JSValue> {
-    // TODO: Implement proper bound function creation
-    // For now, just return the original function
-    Ok(this)
+/// Function.prototype.bind() wrapper - creates a bound function object
+pub fn function_bind_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    // Create a new object to represent the bound function
+    let bound_obj = ctx.new_object()
+        .map_err(|_| JSValue::exception())?;
+
+    // Store the target function
+    let target_atom = string_to_atom("__boundTarget__");
+    ctx.add_property(bound_obj, target_atom, this, crate::object::PropertyFlags::empty())
+        .map_err(|_| JSValue::exception())?;
+
+    // Store the bound this value
+    let bound_this = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let this_atom = string_to_atom("__boundThis__");
+    ctx.add_property(bound_obj, this_atom, bound_this, crate::object::PropertyFlags::empty())
+        .map_err(|_| JSValue::exception())?;
+
+    // Store bound arguments (if any)
+    if args.len() > 1 {
+        let bound_args = ctx.new_object()
+            .map_err(|_| JSValue::exception())?;
+        for (i, arg) in args[1..].iter().enumerate() {
+            let idx_atom = string_to_atom(&alloc::format!("{}", i));
+            ctx.add_property(bound_args, idx_atom, *arg, crate::object::PropertyFlags::empty())
+                .map_err(|_| JSValue::exception())?;
+        }
+        let length_atom = string_to_atom("length");
+        let length_val = JSValue::from_int((args.len() - 1) as i32);
+        ctx.add_property(bound_args, length_atom, length_val, crate::object::PropertyFlags::empty())
+            .map_err(|_| JSValue::exception())?;
+
+        let args_atom = string_to_atom("__boundArgs__");
+        ctx.add_property(bound_obj, args_atom, bound_args, crate::object::PropertyFlags::empty())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    // Mark this as a bound function (for call_function to recognize)
+    let is_bound_atom = string_to_atom("__isBoundFunction__");
+    ctx.add_property(bound_obj, is_bound_atom, JSValue::bool(true), crate::object::PropertyFlags::empty())
+        .map_err(|_| JSValue::exception())?;
+
+    Ok(bound_obj)
+}
+
+// ========== Number Methods ==========
+
+/// Number.isNaN() wrapper
+pub fn number_is_nan_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::builtins::number;
+
+    let value = args.get(0).copied().unwrap_or(JSValue::undefined());
+    Ok(JSValue::bool(number::is_nan(ctx, value)))
+}
+
+/// Number.isFinite() wrapper
+pub fn number_is_finite_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::builtins::number;
+
+    let value = args.get(0).copied().unwrap_or(JSValue::undefined());
+    Ok(JSValue::bool(number::is_finite(ctx, value)))
+}
+
+/// Number.isInteger() wrapper
+pub fn number_is_integer_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::builtins::number;
+
+    let value = args.get(0).copied().unwrap_or(JSValue::undefined());
+    Ok(JSValue::bool(number::is_integer(ctx, value)))
+}
+
+/// Number.prototype.toFixed() wrapper
+pub fn number_to_fixed_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::builtins::number;
+    use crate::runtime::conversion::to_int32;
+
+    let digits = args.get(0).map(|v| to_int32(ctx, *v));
+    number::to_fixed(ctx, this, digits)
+}
+
+/// Number.prototype.toString() wrapper
+pub fn number_to_string_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::builtins::number;
+    use crate::runtime::conversion::to_int32;
+
+    let radix = args.get(0).map(|v| to_int32(ctx, *v));
+    number::to_string(ctx, this, radix)
 }

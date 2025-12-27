@@ -74,7 +74,14 @@ pub fn parse_float(s: &str) -> f64 {
 
 /// Number.prototype.toString() - Returns string representation
 pub fn to_string(ctx: &mut Context, num: JSValue, radix: Option<i32>) -> Result<JSValue, JSValue> {
-    let n = ctx.get_number(num).ok_or(JSValue::exception())?;
+    // Get the number value (handle both inline ints and boxed floats)
+    let n = if let Some(i) = num.to_int() {
+        i as f64
+    } else if let Some(f) = ctx.get_number(num) {
+        f
+    } else {
+        return Err(JSValue::exception());
+    };
 
     if n.is_nan() {
         return ctx.new_string("NaN").map_err(|_| JSValue::exception());
@@ -85,20 +92,62 @@ pub fn to_string(ctx: &mut Context, num: JSValue, radix: Option<i32>) -> Result<
         return ctx.new_string(s).map_err(|_| JSValue::exception());
     }
 
-    let radix = radix.unwrap_or(10);
+    let radix = radix.unwrap_or(10).clamp(2, 36);
     if radix == 10 {
         let s = alloc::format!("{}", n);
         ctx.new_string(&s).map_err(|_| JSValue::exception())
     } else {
-        // Simplified: only support base 10 for now
-        let s = alloc::format!("{}", n as i64);
+        // Convert to integer for radix conversion
+        let int_val = n as i64;
+        let s = int_to_string_radix(int_val, radix as u32);
         ctx.new_string(&s).map_err(|_| JSValue::exception())
     }
 }
 
+/// Convert an integer to a string in the given radix (2-36)
+fn int_to_string_radix(mut n: i64, radix: u32) -> alloc::string::String {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    if n == 0 {
+        return String::from("0");
+    }
+
+    let negative = n < 0;
+    if negative {
+        n = -n;
+    }
+
+    let mut digits = Vec::new();
+    while n > 0 {
+        let digit = (n % radix as i64) as u32;
+        let c = if digit < 10 {
+            (b'0' + digit as u8) as char
+        } else {
+            (b'a' + (digit - 10) as u8) as char
+        };
+        digits.push(c);
+        n /= radix as i64;
+    }
+
+    if negative {
+        digits.push('-');
+    }
+
+    digits.reverse();
+    digits.into_iter().collect()
+}
+
 /// Number.prototype.toFixed() - Formats number with fixed decimal places
 pub fn to_fixed(ctx: &mut Context, num: JSValue, digits: Option<i32>) -> Result<JSValue, JSValue> {
-    let n = ctx.get_number(num).ok_or(JSValue::exception())?;
+    // Get the number value (handle both inline ints and boxed floats)
+    let n = if let Some(i) = num.to_int() {
+        i as f64
+    } else if let Some(f) = ctx.get_number(num) {
+        f
+    } else {
+        return Err(JSValue::exception());
+    };
     let digits = digits.unwrap_or(0).clamp(0, 20);
 
     if n.is_nan() {

@@ -622,6 +622,19 @@ impl Context {
             return None;
         }
 
+        // Handle number primitives (inline int or boxed float)
+        if obj_val.is_int() || self.get_number(obj_val).is_some() {
+            let number_atom = crate::runtime::init::string_to_atom("Number");
+            let prototype_atom = crate::runtime::init::string_to_atom("prototype");
+
+            if let Some(number_ctor) = self.get_global_property(number_atom) {
+                if let Some(number_proto) = self.get_property_internal(number_ctor, prototype_atom) {
+                    return self.get_property_internal(number_proto, key);
+                }
+            }
+            return None;
+        }
+
         // Handle functions - they inherit from Function.prototype
         if self.get_native_function(obj_val).is_some() || self.get_bytecode_function(obj_val).is_some() {
             // Look up in Function.prototype
@@ -823,6 +836,14 @@ impl Context {
         this_val: JSValue,
         args: &[JSValue],
     ) -> Result<JSValue, JSValue> {
+        // Check if this is a bound function object
+        let is_bound_atom = crate::runtime::init::string_to_atom("__isBoundFunction__");
+        if let Some(is_bound) = self.get_property(func, is_bound_atom) {
+            if let Some(true) = is_bound.to_bool() {
+                return self.call_bound_function(func, args);
+            }
+        }
+
         // Check if it's a native function
         let func_index = match func.to_ptr() {
             Some(idx) => idx,
@@ -852,6 +873,48 @@ impl Context {
 
         // Unknown function type
         Err(self.new_string("Not a callable function").unwrap_or(JSValue::undefined()))
+    }
+
+    /// Call a bound function object
+    fn call_bound_function(
+        &mut self,
+        bound_func: JSValue,
+        call_args: &[JSValue],
+    ) -> Result<JSValue, JSValue> {
+        // Get the target function
+        let target_atom = crate::runtime::init::string_to_atom("__boundTarget__");
+        let target = self.get_property(bound_func, target_atom)
+            .ok_or_else(|| self.new_string("Invalid bound function").unwrap_or(JSValue::undefined()))?;
+
+        // Get the bound this value
+        let this_atom = crate::runtime::init::string_to_atom("__boundThis__");
+        let bound_this = self.get_property(bound_func, this_atom)
+            .unwrap_or(JSValue::undefined());
+
+        // Get any bound arguments and combine with call arguments
+        let args_atom = crate::runtime::init::string_to_atom("__boundArgs__");
+        let combined_args: alloc::vec::Vec<JSValue> = if let Some(bound_args) = self.get_property(bound_func, args_atom) {
+            // Get bound args length
+            let length_atom = crate::runtime::init::string_to_atom("length");
+            let bound_len = self.get_property(bound_args, length_atom)
+                .and_then(|v| v.to_int())
+                .unwrap_or(0) as usize;
+
+            // Collect bound args + call args
+            let mut all_args = alloc::vec::Vec::with_capacity(bound_len + call_args.len());
+            for i in 0..bound_len {
+                let idx_atom = crate::runtime::init::string_to_atom(&alloc::format!("{}", i));
+                let val = self.get_property(bound_args, idx_atom).unwrap_or(JSValue::undefined());
+                all_args.push(val);
+            }
+            all_args.extend_from_slice(call_args);
+            all_args
+        } else {
+            call_args.to_vec()
+        };
+
+        // Call the target function with bound this and combined args
+        self.call_function(target, bound_this, &combined_args)
     }
 
     /// Creates a new native function
