@@ -4,6 +4,7 @@
 
 use alloc::vec::Vec;
 use alloc::string::{String, ToString};
+use alloc::collections::BTreeMap;
 use crate::bytecode::{BytecodeReader, Opcode, Operand};
 use crate::context::Context;
 use crate::memory::HeapIndex;
@@ -47,6 +48,8 @@ pub struct VM {
     for_in_state: Vec<(Vec<String>, usize)>,
     /// For-of iterator state: (values, current_index)
     for_of_state: Vec<(Vec<JSValue>, usize)>,
+    /// Reverse mapping from atom hash to string (for for...in enumeration)
+    atom_hash_to_string: BTreeMap<u32, String>,
 }
 
 /// VM execution result
@@ -85,6 +88,7 @@ impl VM {
             promoted_var_refs: Vec::new(),
             for_in_state: Vec::new(),
             for_of_state: Vec::new(),
+            atom_hash_to_string: BTreeMap::new(),
         }
     }
 
@@ -2339,7 +2343,8 @@ impl VM {
 
     /// Helper: Gets an atom from the atom table and converts it to a JSAtom
     /// Uses the same hash function as the runtime
-    fn get_atom_from_table(&self, idx: usize) -> Result<crate::value::JSAtom, JSValue> {
+    /// Also stores the hash->string mapping for reverse lookup (for-in enumeration)
+    fn get_atom_from_table(&mut self, idx: usize) -> Result<crate::value::JSAtom, JSValue> {
         if idx >= self.atom_table.len() {
             return Err(JSValue::undefined());
         }
@@ -2350,6 +2355,11 @@ impl VM {
         let mut hash: u32 = 5381;
         for byte in name.bytes() {
             hash = hash.wrapping_mul(33).wrapping_add(byte as u32);
+        }
+
+        // Store reverse mapping for for-in enumeration
+        if !self.atom_hash_to_string.contains_key(&hash) {
+            self.atom_hash_to_string.insert(hash, name.clone());
         }
 
         Ok(crate::value::JSAtom::from_id(hash))
@@ -2454,8 +2464,24 @@ impl VM {
                                 return keys;
                             }
                         }
-                        // For regular objects, we can't easily get string keys
-                        // due to hashing limitation - this is a known limitation
+
+                        // For regular objects, enumerate properties using reverse hash mapping
+                        let js_obj: &crate::object::JSObject = ctx.arena().get(index);
+                        if js_obj.has_properties() {
+                            let props_index = js_obj.props_index();
+                            if let Some(props_table) = ctx.get_property_table(props_index) {
+                                let properties = props_table.properties();
+                                for prop in properties {
+                                    if prop.flags().is_enumerable() {
+                                        let atom_hash = prop.key().id();
+                                        // Look up the string from our reverse mapping
+                                        if let Some(key_str) = self.atom_hash_to_string.get(&atom_hash) {
+                                            keys.push(key_str.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         return keys;
                     }
                     _ => {}

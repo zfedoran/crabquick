@@ -215,6 +215,63 @@ pub enum TokenKind {
     Error(String),
 }
 
+impl TokenKind {
+    /// Returns true if this token is a reserved word that can be used as a property key
+    pub fn is_reserved_word(&self) -> bool {
+        matches!(self,
+            TokenKind::Var | TokenKind::Let | TokenKind::Const |
+            TokenKind::Function | TokenKind::Return |
+            TokenKind::If | TokenKind::Else |
+            TokenKind::While | TokenKind::For | TokenKind::Do |
+            TokenKind::Break | TokenKind::Continue |
+            TokenKind::Switch | TokenKind::Case | TokenKind::Default |
+            TokenKind::Try | TokenKind::Catch | TokenKind::Finally | TokenKind::Throw |
+            TokenKind::New | TokenKind::This |
+            TokenKind::TypeOf | TokenKind::Void | TokenKind::Delete |
+            TokenKind::In | TokenKind::Of | TokenKind::InstanceOf |
+            TokenKind::True | TokenKind::False | TokenKind::Null | TokenKind::Undefined
+        )
+    }
+
+    /// Returns the string representation of a reserved word
+    pub fn as_property_name(&self) -> Option<String> {
+        match self {
+            TokenKind::Var => Some("var".to_string()),
+            TokenKind::Let => Some("let".to_string()),
+            TokenKind::Const => Some("const".to_string()),
+            TokenKind::Function => Some("function".to_string()),
+            TokenKind::Return => Some("return".to_string()),
+            TokenKind::If => Some("if".to_string()),
+            TokenKind::Else => Some("else".to_string()),
+            TokenKind::While => Some("while".to_string()),
+            TokenKind::For => Some("for".to_string()),
+            TokenKind::Do => Some("do".to_string()),
+            TokenKind::Break => Some("break".to_string()),
+            TokenKind::Continue => Some("continue".to_string()),
+            TokenKind::Switch => Some("switch".to_string()),
+            TokenKind::Case => Some("case".to_string()),
+            TokenKind::Default => Some("default".to_string()),
+            TokenKind::Try => Some("try".to_string()),
+            TokenKind::Catch => Some("catch".to_string()),
+            TokenKind::Finally => Some("finally".to_string()),
+            TokenKind::Throw => Some("throw".to_string()),
+            TokenKind::New => Some("new".to_string()),
+            TokenKind::This => Some("this".to_string()),
+            TokenKind::TypeOf => Some("typeof".to_string()),
+            TokenKind::Void => Some("void".to_string()),
+            TokenKind::Delete => Some("delete".to_string()),
+            TokenKind::In => Some("in".to_string()),
+            TokenKind::Of => Some("of".to_string()),
+            TokenKind::InstanceOf => Some("instanceof".to_string()),
+            TokenKind::True => Some("true".to_string()),
+            TokenKind::False => Some("false".to_string()),
+            TokenKind::Null => Some("null".to_string()),
+            TokenKind::Undefined => Some("undefined".to_string()),
+            _ => None,
+        }
+    }
+}
+
 /// A token with location information
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {

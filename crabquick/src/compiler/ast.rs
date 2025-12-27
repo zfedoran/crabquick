@@ -378,6 +378,13 @@ pub enum Stmt {
     Empty {
         loc: SourceLocation,
     },
+
+    /// Labeled statement
+    Labeled {
+        label: String,
+        body: Box<Stmt>,
+        loc: SourceLocation,
+    },
 }
 
 impl Stmt {
@@ -400,7 +407,8 @@ impl Stmt {
             Stmt::Throw { loc, .. } |
             Stmt::Try { loc, .. } |
             Stmt::Switch { loc, .. } |
-            Stmt::Empty { loc, .. } => *loc,
+            Stmt::Empty { loc, .. } |
+            Stmt::Labeled { loc, .. } => *loc,
         }
     }
 }

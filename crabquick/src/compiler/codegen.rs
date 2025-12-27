@@ -387,13 +387,20 @@ impl CodeGenerator {
         }
 
         // Now collect scope bindings and captured vars for the nested function
+        // IMPORTANT: Only pass outer_vars if we're inside a closure (not at top level)
+        // Top-level variables should remain as globals, not be captured
         let mut outer_vars = Vec::new();
-        self.collect_scope_vars(&self.scope.clone(), &mut outer_vars);
+        if self.is_closure {
+            // We're inside a function, so pass our local scope as capturable
+            self.collect_scope_vars(&self.scope.clone(), &mut outer_vars);
 
-        // Include our captured vars so nested functions can access them
-        for (i, cv) in self.captured_vars.iter().enumerate() {
-            outer_vars.push((cv.name.clone(), i as u8, true));
+            // Include our captured vars so nested functions can access them
+            for (i, cv) in self.captured_vars.iter().enumerate() {
+                outer_vars.push((cv.name.clone(), i as u8, true));
+            }
         }
+        // If we're at top level (is_closure=false), outer_vars stays empty
+        // so nested functions will treat unresolved variables as globals
 
         // Create a new code generator for the function with access to outer vars
         let mut func_gen = CodeGenerator::new_for_closure(outer_vars);
@@ -566,6 +573,9 @@ impl CodeGenerator {
                 }
             }
             Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Empty { .. } => {}
+            Stmt::Labeled { body, .. } => {
+                self.collect_vars_in_stmt(body, vars);
+            }
         }
     }
 
@@ -790,15 +800,35 @@ impl CodeGenerator {
 
             Stmt::VarDecl { kind, declarations, .. } => {
                 for decl in declarations {
-                    let index = self.scope.add_binding(decl.name.clone(), *kind);
+                    if self.is_closure {
+                        // Inside a function - use local variable
+                        let index = self.scope.add_binding(decl.name.clone(), *kind);
 
-                    if let Some(ref init) = decl.init {
-                        self.gen_expr(init)?;
-                        self.emit(Instruction::with_u8(Opcode::PutLoc, index));
+                        if let Some(ref init) = decl.init {
+                            self.gen_expr(init)?;
+                            self.emit(Instruction::with_u8(Opcode::PutLoc, index));
+                        } else {
+                            // Initialize to undefined
+                            self.emit_simple(Opcode::Undefined);
+                            self.emit(Instruction::with_u8(Opcode::PutLoc, index));
+                        }
                     } else {
-                        // Initialize to undefined
-                        self.emit_simple(Opcode::Undefined);
-                        self.emit(Instruction::with_u8(Opcode::PutLoc, index));
+                        // At top level - use global variable
+                        let atom_id = self.get_or_create_atom(&decl.name);
+
+                        if let Some(ref init) = decl.init {
+                            self.gen_expr(init)?;
+                        } else {
+                            self.emit_simple(Opcode::Undefined);
+                        }
+
+                        if atom_id <= 255 {
+                            self.emit(Instruction::with_atom8(Opcode::SetGlobal8, atom_id as u8));
+                        } else {
+                            self.emit(Instruction::with_atom16(Opcode::SetGlobal16, atom_id as u16));
+                        }
+                        // Pop the value left on stack by SetGlobal
+                        self.emit_simple(Opcode::Drop);
                     }
                 }
                 Ok(())
@@ -1218,6 +1248,12 @@ impl CodeGenerator {
                 // These are stubs for now
                 Ok(())
             }
+
+            Stmt::Labeled { body, .. } => {
+                // For now, just generate code for the body
+                // TODO: Support labeled break/continue targeting specific labels
+                self.gen_stmt(body)
+            }
         }
     }
 
@@ -1419,56 +1455,77 @@ impl CodeGenerator {
             }
 
             Expr::Assignment { op, left, right, .. } => {
+                // Handle compound assignment: need to load current value first
+                if !matches!(op, AssignOp::Assign) {
+                    // Load current value for compound assignment
+                    match left.as_ref() {
+                        Expr::Identifier(name, _) => {
+                            match self.resolve_variable(name) {
+                                VarLocation::Local(index) => {
+                                    self.emit(Instruction::with_u8(Opcode::GetLoc, index));
+                                }
+                                VarLocation::Captured(index) => {
+                                    self.emit(Instruction::with_u8(Opcode::GetVarRef, index));
+                                }
+                                VarLocation::Global => {
+                                    let atom_id = self.get_or_create_atom(name);
+                                    if atom_id <= 255 {
+                                        self.emit(Instruction::with_u8(Opcode::GetGlobal8, atom_id as u8));
+                                    } else {
+                                        self.emit(Instruction::with_u16(Opcode::GetGlobal16, atom_id as u16));
+                                    }
+                                }
+                            }
+                        }
+                        Expr::Member { .. } => {
+                            // For compound property assignment like obj.x += 1
+                            // This is complex - for now, fall back to simple approach
+                            // TODO: Properly implement compound member assignment
+                            // Just generate the member access expression
+                            self.gen_expr(left)?;
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Compile right side
                 self.gen_expr(right)?;
+
+                // Apply binary operation for compound assignment
+                if !matches!(op, AssignOp::Assign) {
+                    let bin_op = match op {
+                        AssignOp::AddAssign => Opcode::Add,
+                        AssignOp::SubAssign => Opcode::Sub,
+                        AssignOp::MulAssign => Opcode::Mul,
+                        AssignOp::DivAssign => Opcode::Div,
+                        AssignOp::ModAssign => Opcode::Mod,
+                        AssignOp::LeftShiftAssign => Opcode::Shl,
+                        AssignOp::RightShiftAssign => Opcode::Sar,
+                        AssignOp::UnsignedRightShiftAssign => Opcode::Shr,
+                        AssignOp::BitAndAssign => Opcode::And,
+                        AssignOp::BitOrAssign => Opcode::Or,
+                        AssignOp::BitXorAssign => Opcode::Xor,
+                        AssignOp::Assign => unreachable!(),
+                    };
+                    self.emit_simple(bin_op);
+                }
 
                 // Handle assignment target
                 match left.as_ref() {
                     Expr::Identifier(name, _) => {
                         match self.resolve_variable(name) {
                             VarLocation::Local(index) => {
-                                // Local variable
-                                let opcode = if matches!(op, AssignOp::Assign) {
-                                    Opcode::SetLoc
-                                } else {
-                                    // Compound assignment - need to load, operate, store
-                                    Opcode::PutLoc
-                                };
-                                self.emit(Instruction::with_u8(opcode, index));
+                                self.emit(Instruction::with_u8(Opcode::SetLoc, index));
                             }
                             VarLocation::Captured(index) => {
-                                // Captured variable
-                                let opcode = if matches!(op, AssignOp::Assign) {
-                                    Opcode::SetVarRef
-                                } else {
-                                    // Compound assignment
-                                    Opcode::PutVarRef
-                                };
-                                self.emit(Instruction::with_u8(opcode, index));
+                                self.emit(Instruction::with_u8(Opcode::SetVarRef, index));
                             }
                             VarLocation::Global => {
-                                // Global variable
                                 let atom_id = self.get_or_create_atom(name);
-                                let opcode = if matches!(op, AssignOp::Assign) {
-                                    // Use SetGlobal to return the value
-                                    if atom_id <= 255 {
-                                        Opcode::SetGlobal8
-                                    } else {
-                                        Opcode::SetGlobal16
-                                    }
-                                } else {
-                                    // Compound assignment - use PutGlobal (doesn't return value)
-                                    if atom_id <= 255 {
-                                        Opcode::PutGlobal8
-                                    } else {
-                                        Opcode::PutGlobal16
-                                    }
-                                };
-
                                 if atom_id <= 255 {
-                                    self.emit(Instruction::with_atom8(opcode, atom_id as u8));
+                                    self.emit(Instruction::with_atom8(Opcode::SetGlobal8, atom_id as u8));
                                 } else {
-                                    self.emit(Instruction::with_atom16(opcode, atom_id as u16));
+                                    self.emit(Instruction::with_atom16(Opcode::SetGlobal16, atom_id as u16));
                                 }
                             }
                         }

@@ -161,6 +161,18 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Stmt::Empty { loc })
             }
+            TokenKind::Identifier(_) => {
+                // Check if this is a labeled statement (identifier followed by colon)
+                let peeked_kind = self.peek().kind.clone();
+                if matches!(peeked_kind, TokenKind::Colon) {
+                    self.parse_labeled_statement()
+                } else {
+                    // Expression statement
+                    let expr = self.parse_expression()?;
+                    self.consume_semicolon();
+                    Ok(Stmt::Expression { expr, loc })
+                }
+            }
             _ => {
                 // Expression statement
                 let expr = self.parse_expression()?;
@@ -338,8 +350,10 @@ impl<'a> Parser<'a> {
 
             self.expect(TokenKind::Semicolon)?;
             Some(ForInit::VarDecl { kind, declarations })
-        } else {
-            let expr = self.parse_expression()?;
+        } else if self.current.kind != TokenKind::Semicolon {
+            // For for-in/for-of, we need to parse LHS without treating 'in' as binary operator
+            // First, try to parse as a simple LHS (identifier or member expression)
+            let expr = self.parse_left_hand_side_expression()?;
 
             // Check for for-in
             if self.consume_if(&TokenKind::In) {
@@ -369,8 +383,14 @@ impl<'a> Parser<'a> {
                 });
             }
 
+            // Not for-in/for-of, need to continue parsing as full expression
+            // The expr we parsed is just the LHS, we need to handle binary ops
+            let full_expr = self.continue_parsing_expression(expr)?;
+
             self.expect(TokenKind::Semicolon)?;
-            Some(ForInit::Expr(expr))
+            Some(ForInit::Expr(full_expr))
+        } else {
+            None
         };
 
         // Parse test
@@ -442,6 +462,22 @@ impl<'a> Parser<'a> {
         self.consume_semicolon();
 
         Ok(Stmt::Continue { label, loc })
+    }
+
+    /// Parses a labeled statement (label: statement)
+    fn parse_labeled_statement(&mut self) -> ParseResult<Stmt> {
+        let loc = self.current.location;
+
+        // Get the label name
+        let label = self.parse_identifier()?;
+
+        // Expect colon
+        self.expect(TokenKind::Colon)?;
+
+        // Parse the body statement
+        let body = Box::new(self.parse_statement()?);
+
+        Ok(Stmt::Labeled { label, body, loc })
     }
 
     /// Parses a throw statement
@@ -581,6 +617,30 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses a property name (identifier or reserved word)
+    /// Used for member access after dot and object property keys
+    fn parse_property_name(&mut self) -> ParseResult<String> {
+        // First try as identifier
+        if let TokenKind::Identifier(name) = &self.current.kind {
+            let result = name.clone();
+            self.advance();
+            return Ok(result);
+        }
+
+        // Try as reserved word
+        if self.current.kind.is_reserved_word() {
+            if let Some(name) = self.current.kind.as_property_name() {
+                self.advance();
+                return Ok(name);
+            }
+        }
+
+        Err(ParseError::new(
+            format!("Expected property name, found {:?}", self.current.kind),
+            self.current.location,
+        ))
+    }
+
     /// Parses a parameter list
     fn parse_parameter_list(&mut self) -> ParseResult<Vec<String>> {
         let mut params = Vec::new();
@@ -605,6 +665,121 @@ impl<'a> Parser<'a> {
     /// Parses an expression
     fn parse_expression(&mut self) -> ParseResult<Expr> {
         self.parse_sequence_expression()
+    }
+
+    /// Parses a left-hand-side expression (for for-in/for-of loop variable)
+    /// This parses identifier, member access, call expressions but NOT binary operators
+    fn parse_left_hand_side_expression(&mut self) -> ParseResult<Expr> {
+        self.parse_postfix_expression()
+    }
+
+    /// Continues parsing an expression from an already-parsed LHS
+    /// This handles assignment and binary operators
+    fn continue_parsing_expression(&mut self, left: Expr) -> ParseResult<Expr> {
+        // Check for assignment operators first
+        let assign_op = match &self.current.kind {
+            TokenKind::Assign => Some(AssignOp::Assign),
+            TokenKind::PlusAssign => Some(AssignOp::AddAssign),
+            TokenKind::MinusAssign => Some(AssignOp::SubAssign),
+            TokenKind::StarAssign => Some(AssignOp::MulAssign),
+            TokenKind::SlashAssign => Some(AssignOp::DivAssign),
+            TokenKind::PercentAssign => Some(AssignOp::ModAssign),
+            TokenKind::AmpersandAssign => Some(AssignOp::BitAndAssign),
+            TokenKind::PipeAssign => Some(AssignOp::BitOrAssign),
+            TokenKind::CaretAssign => Some(AssignOp::BitXorAssign),
+            TokenKind::LtLtAssign => Some(AssignOp::LeftShiftAssign),
+            TokenKind::GtGtAssign => Some(AssignOp::RightShiftAssign),
+            TokenKind::GtGtGtAssign => Some(AssignOp::UnsignedRightShiftAssign),
+            _ => None,
+        };
+
+        if let Some(op) = assign_op {
+            let loc = self.current.location;
+            self.advance();
+            let right = self.parse_assignment_expression()?;
+            return Ok(Expr::Assignment {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                loc,
+            });
+        }
+
+        // Otherwise, continue with binary operators
+        // We need to handle ternary, logical, etc.
+        self.continue_binary_expression(left)
+    }
+
+    /// Continues parsing binary operators from an already-parsed LHS
+    fn continue_binary_expression(&mut self, left: Expr) -> ParseResult<Expr> {
+        let loc = left.location();
+        let mut result = left;
+
+        // Handle binary operators in precedence order
+        // This is a simplified version - for full correctness we'd need to integrate
+        // with the existing precedence parsing
+        loop {
+            let op = match &self.current.kind {
+                // Logical OR
+                TokenKind::LogicalOr => { self.advance(); BinaryOp::LogicalOr }
+                // Logical AND
+                TokenKind::LogicalAnd => { self.advance(); BinaryOp::LogicalAnd }
+                // Bitwise OR
+                TokenKind::Pipe => { self.advance(); BinaryOp::BitOr }
+                // Bitwise XOR
+                TokenKind::Caret => { self.advance(); BinaryOp::BitXor }
+                // Bitwise AND
+                TokenKind::Ampersand => { self.advance(); BinaryOp::BitAnd }
+                // Equality
+                TokenKind::Eq => { self.advance(); BinaryOp::Eq }
+                TokenKind::NotEq => { self.advance(); BinaryOp::NotEq }
+                TokenKind::StrictEq => { self.advance(); BinaryOp::StrictEq }
+                TokenKind::StrictNotEq => { self.advance(); BinaryOp::StrictNotEq }
+                // Relational (but NOT 'in' - that's why we're here!)
+                TokenKind::Lt => { self.advance(); BinaryOp::Lt }
+                TokenKind::LtEq => { self.advance(); BinaryOp::LtEq }
+                TokenKind::Gt => { self.advance(); BinaryOp::Gt }
+                TokenKind::GtEq => { self.advance(); BinaryOp::GtEq }
+                TokenKind::InstanceOf => { self.advance(); BinaryOp::InstanceOf }
+                // In operator is NOT included here - that's the whole point
+                // Shift
+                TokenKind::LtLt => { self.advance(); BinaryOp::LeftShift }
+                TokenKind::GtGt => { self.advance(); BinaryOp::RightShift }
+                TokenKind::GtGtGt => { self.advance(); BinaryOp::UnsignedRightShift }
+                // Additive
+                TokenKind::Plus => { self.advance(); BinaryOp::Add }
+                TokenKind::Minus => { self.advance(); BinaryOp::Sub }
+                // Multiplicative
+                TokenKind::Star => { self.advance(); BinaryOp::Mul }
+                TokenKind::Slash => { self.advance(); BinaryOp::Div }
+                TokenKind::Percent => { self.advance(); BinaryOp::Mod }
+                TokenKind::StarStar => { self.advance(); BinaryOp::Pow }
+                _ => break,
+            };
+
+            let right = self.parse_unary_expression()?;
+            result = Expr::Binary {
+                op,
+                left: Box::new(result),
+                right: Box::new(right),
+                loc,
+            };
+        }
+
+        // Handle ternary
+        if self.consume_if(&TokenKind::Question) {
+            let consequent = self.parse_assignment_expression()?;
+            self.expect(TokenKind::Colon)?;
+            let alternate = self.parse_assignment_expression()?;
+            result = Expr::Conditional {
+                test: Box::new(result),
+                consequent: Box::new(consequent),
+                alternate: Box::new(alternate),
+                loc,
+            };
+        }
+
+        Ok(result)
     }
 
     /// Parses a sequence expression (comma operator)
@@ -1093,7 +1268,7 @@ impl<'a> Parser<'a> {
                 TokenKind::Dot => {
                     let loc = self.current.location;
                     self.advance();
-                    let property = self.parse_identifier()?;
+                    let property = self.parse_property_name()?;
 
                     expr = Expr::Member {
                         object: Box::new(expr),
@@ -1147,7 +1322,7 @@ impl<'a> Parser<'a> {
                 TokenKind::Dot => {
                     let loc = self.current.location;
                     self.advance();
-                    let property = self.parse_identifier()?;
+                    let property = self.parse_property_name()?;
 
                     expr = Expr::Member {
                         object: Box::new(expr),
@@ -1341,6 +1516,12 @@ impl<'a> Parser<'a> {
                     let expr = self.parse_assignment_expression()?;
                     self.expect(TokenKind::RBracket)?;
                     PropertyKey::Computed(Box::new(expr))
+                }
+                // Reserved words can be used as property keys
+                kind if kind.is_reserved_word() => {
+                    let name = kind.as_property_name().unwrap_or_default();
+                    self.advance();
+                    PropertyKey::Identifier(name)
                 }
                 _ => return Err(ParseError::new(
                     "Expected property key".to_string(),
