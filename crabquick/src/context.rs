@@ -53,6 +53,20 @@ pub struct Context {
     // - interrupt_handler: Option<InterruptHandler>
 }
 
+/// Result of property lookup with accessor info
+pub enum PropertyLookupResult {
+    /// Not found
+    NotFound,
+    /// Regular value
+    Value(JSValue),
+    /// Getter function that needs to be called
+    Getter(JSValue),
+    /// Setter function (only used for set operations)
+    Setter(JSValue),
+    /// Both getter and setter
+    GetterSetter(JSValue, JSValue),
+}
+
 impl Context {
     /// Creates a new JavaScript context with the specified memory size
     ///
@@ -681,6 +695,52 @@ impl Context {
         None
     }
 
+    /// Finds a property with accessor info (for interpreter to handle getters)
+    ///
+    /// This walks the prototype chain and returns the property info including
+    /// whether it's a getter/setter that needs to be invoked.
+    pub fn find_property_with_accessor(
+        &self,
+        obj_val: JSValue,
+        key: crate::value::JSAtom,
+    ) -> PropertyLookupResult {
+        let mut current = obj_val;
+        let max_depth = 100;
+
+        for _ in 0..max_depth {
+            // Look in own properties
+            if let Some(prop) = self.find_own_property(current, key) {
+                let flags = prop.flags();
+                if flags.has_get() || flags.has_set() {
+                    // It's an accessor property
+                    let getter = if flags.has_get() { prop.value() } else { JSValue::undefined() };
+                    let setter = if flags.has_set() { prop.setter() } else { JSValue::undefined() };
+                    if flags.has_get() && flags.has_set() {
+                        return PropertyLookupResult::GetterSetter(getter, setter);
+                    } else if flags.has_get() {
+                        return PropertyLookupResult::Getter(getter);
+                    } else {
+                        return PropertyLookupResult::Setter(setter);
+                    }
+                }
+                return PropertyLookupResult::Value(prop.value());
+            }
+
+            // Walk up prototype chain
+            if let Some(obj) = self.get_object(current) {
+                let proto = obj.prototype();
+                if proto.is_null() {
+                    return PropertyLookupResult::NotFound;
+                }
+                current = proto;
+            } else {
+                return PropertyLookupResult::NotFound;
+            }
+        }
+
+        PropertyLookupResult::NotFound
+    }
+
     /// Adds a property to an object
     ///
     /// This adds to own properties only (doesn't affect prototype chain).
@@ -754,6 +814,174 @@ impl Context {
             // Update count - need to get header again
             let header = props_table.header_mut();
             header.set_count(count + 1);
+        }
+
+        Ok(())
+    }
+
+    /// Defines a getter on an object property
+    ///
+    /// If the property already exists as an accessor, updates the getter.
+    /// If the property doesn't exist, creates a new accessor property.
+    pub fn define_getter(
+        &mut self,
+        obj_val: JSValue,
+        key: crate::value::JSAtom,
+        getter: JSValue,
+    ) -> Result<(), crate::memory::allocator::OutOfMemory> {
+        use crate::object::{Property, PropertyFlags};
+
+        // Get or create property table
+        let obj_index = obj_val.to_ptr().ok_or(crate::memory::allocator::OutOfMemory)?;
+
+        let props_index = {
+            let obj: &crate::object::JSObject = unsafe { self.arena.get(obj_index) };
+            if !obj.has_properties() {
+                let props_idx = self.alloc_property_table(64)?;
+                let obj_mut: &mut crate::object::JSObject = unsafe { self.arena.get_mut(obj_index) };
+                obj_mut.set_props_index(props_idx);
+                props_idx
+            } else {
+                obj.props_index()
+            }
+        };
+
+        // Check if property already exists and update it
+        let props_table = self.get_property_table_mut(props_index)
+            .ok_or(crate::memory::allocator::OutOfMemory)?;
+
+        unsafe {
+            let header = props_table.header();
+            let count = header.count() as usize;
+            let has_hash_table = header.has_hash_table();
+            let hash_mask = if has_hash_table { header.hash_mask() } else { 0 };
+            let capacity = header.capacity();
+
+            // Get both pointers upfront to avoid borrow issues
+            let properties_ptr = props_table.properties_ptr_mut();
+            let hash_table_ptr = props_table.hash_table_ptr_mut();
+
+            // Search for existing property
+            for i in 0..count {
+                let prop = &mut *properties_ptr.add(i);
+                if prop.key() == key {
+                    // Update existing property to be accessor with getter
+                    let existing_setter = if prop.flags().has_set() {
+                        prop.setter()
+                    } else {
+                        JSValue::undefined()
+                    };
+                    let new_flags = PropertyFlags::getset(true, prop.flags().has_set());
+                    *prop = Property::new_accessor(key, getter, existing_setter, new_flags);
+                    return Ok(());
+                }
+            }
+
+            // Property doesn't exist, create new accessor
+            if count as u32 >= capacity {
+                return Err(crate::memory::allocator::OutOfMemory);
+            }
+
+            let flags = PropertyFlags::getset(true, false);
+            let new_prop = Property::new_accessor(key, getter, JSValue::undefined(), flags);
+            *properties_ptr.add(count) = new_prop;
+
+            // Update hash table if present
+            if has_hash_table {
+                let hash = key.id();
+                let slot = (hash & hash_mask) as usize;
+
+                let prop = &mut *properties_ptr.add(count);
+                prop.set_hash_next(*hash_table_ptr.add(slot));
+                *hash_table_ptr.add(slot) = count as u32;
+            }
+
+            let header = props_table.header_mut();
+            header.set_count(count as u32 + 1);
+        }
+
+        Ok(())
+    }
+
+    /// Defines a setter on an object property
+    ///
+    /// If the property already exists as an accessor, updates the setter.
+    /// If the property doesn't exist, creates a new accessor property.
+    pub fn define_setter(
+        &mut self,
+        obj_val: JSValue,
+        key: crate::value::JSAtom,
+        setter: JSValue,
+    ) -> Result<(), crate::memory::allocator::OutOfMemory> {
+        use crate::object::{Property, PropertyFlags};
+
+        // Get or create property table
+        let obj_index = obj_val.to_ptr().ok_or(crate::memory::allocator::OutOfMemory)?;
+
+        let props_index = {
+            let obj: &crate::object::JSObject = unsafe { self.arena.get(obj_index) };
+            if !obj.has_properties() {
+                let props_idx = self.alloc_property_table(64)?;
+                let obj_mut: &mut crate::object::JSObject = unsafe { self.arena.get_mut(obj_index) };
+                obj_mut.set_props_index(props_idx);
+                props_idx
+            } else {
+                obj.props_index()
+            }
+        };
+
+        // Check if property already exists and update it
+        let props_table = self.get_property_table_mut(props_index)
+            .ok_or(crate::memory::allocator::OutOfMemory)?;
+
+        unsafe {
+            let header = props_table.header();
+            let count = header.count() as usize;
+            let has_hash_table = header.has_hash_table();
+            let hash_mask = if has_hash_table { header.hash_mask() } else { 0 };
+            let capacity = header.capacity();
+
+            // Get both pointers upfront to avoid borrow issues
+            let properties_ptr = props_table.properties_ptr_mut();
+            let hash_table_ptr = props_table.hash_table_ptr_mut();
+
+            // Search for existing property
+            for i in 0..count {
+                let prop = &mut *properties_ptr.add(i);
+                if prop.key() == key {
+                    // Update existing property to be accessor with setter
+                    let existing_getter = if prop.flags().has_get() {
+                        prop.value()
+                    } else {
+                        JSValue::undefined()
+                    };
+                    let new_flags = PropertyFlags::getset(prop.flags().has_get(), true);
+                    *prop = Property::new_accessor(key, existing_getter, setter, new_flags);
+                    return Ok(());
+                }
+            }
+
+            // Property doesn't exist, create new accessor
+            if count as u32 >= capacity {
+                return Err(crate::memory::allocator::OutOfMemory);
+            }
+
+            let flags = PropertyFlags::getset(false, true);
+            let new_prop = Property::new_accessor(key, JSValue::undefined(), setter, flags);
+            *properties_ptr.add(count) = new_prop;
+
+            // Update hash table if present
+            if has_hash_table {
+                let hash = key.id();
+                let slot = (hash & hash_mask) as usize;
+
+                let prop = &mut *properties_ptr.add(count);
+                prop.set_hash_next(*hash_table_ptr.add(slot));
+                *hash_table_ptr.add(slot) = count as u32;
+            }
+
+            let header = props_table.header_mut();
+            header.set_count(count as u32 + 1);
         }
 
         Ok(())

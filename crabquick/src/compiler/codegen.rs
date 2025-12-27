@@ -420,6 +420,18 @@ impl CodeGenerator {
             None
         };
 
+        // Check if 'arguments' is referenced in the function body
+        // If so, we need to add it as a local and emit the Arguments opcode
+        let uses_arguments = referenced_vars.iter().any(|v| v == "arguments");
+        if uses_arguments {
+            // Add 'arguments' as a local variable
+            let args_slot = func_gen.scope.add_binding("arguments".to_string(), VarKind::Var);
+            // Emit Arguments opcode to create the arguments object
+            func_gen.emit_simple(Opcode::Arguments);
+            // Store it in the local variable slot
+            func_gen.emit(Instruction::with_u8(Opcode::PutLoc, args_slot));
+        }
+
         // Compile all statements in the function body
         let last_idx = body.len().saturating_sub(1);
         for (i, stmt) in body.iter().enumerate() {
@@ -1082,9 +1094,72 @@ impl CodeGenerator {
                 Ok(())
             }
 
-            Stmt::Try { .. } => {
-                // Try/catch requires complex control flow - stub for now
-                self.emit_simple(Opcode::Nop);
+            Stmt::Try { block, handler, finalizer, .. } => {
+                // Try/catch implementation
+                //
+                // Structure:
+                //   PushCatchOffset catch_label
+                //   [try block]
+                //   ClearCatchOffset      ; clear the exception handler
+                //   Goto end_label        ; skip catch block
+                // catch_label:
+                //   [store exception in catch var]
+                //   [catch block]
+                // end_label:
+                //   [finally block if present]
+
+                // Push catch handler offset - offset points to catch block
+                self.emit(Instruction::with_label(Opcode::PushCatchOffset, 0));
+                let catch_patch_offset = self.writer.pc(); // Position right after instruction
+
+                // Generate try block
+                for stmt in block {
+                    self.gen_stmt(stmt)?;
+                }
+
+                // Clear the catch offset and jump to end
+                self.emit_simple(Opcode::ClearCatchOffset);  // Clear exception handler after try completes normally
+                self.emit(Instruction::with_label(Opcode::Goto, 0));
+                let end_patch_offset = self.writer.pc(); // Position right after goto instruction
+
+                // Catch label - exception value is on the stack
+                let catch_pc = self.writer.pc();
+                // Patch the PushCatchOffset to jump here. The offset in PushCatchOffset is relative to the PC after the instruction.
+                self.writer.patch_i32(catch_patch_offset - 4, (catch_pc as i32) - (catch_patch_offset as i32));
+
+                if let Some(catch_clause) = handler {
+                    // If there's a catch parameter, store the exception in it
+                    if let Some(ref param_name) = catch_clause.param {
+                        // Add catch parameter as a local variable
+                        let var_idx = self.scope.add_binding(param_name.clone(), VarKind::Let);
+                        // Exception is on the stack, store it in the catch variable
+                        self.emit(Instruction::with_u8(Opcode::PutLoc, var_idx));
+                    } else {
+                        // No parameter, just drop the exception
+                        self.emit_simple(Opcode::Drop);
+                    }
+
+                    // Generate catch block
+                    for stmt in &catch_clause.body {
+                        self.gen_stmt(stmt)?;
+                    }
+                } else {
+                    // No catch handler, just rethrow
+                    self.emit_simple(Opcode::Throw);
+                }
+
+                // End label
+                let end_pc = self.writer.pc();
+                // Patch the Goto to jump here
+                self.writer.patch_i32(end_patch_offset - 4, (end_pc as i32) - (end_patch_offset as i32));
+
+                // Generate finally block if present
+                if let Some(finally_block) = finalizer {
+                    for stmt in finally_block {
+                        self.gen_stmt(stmt)?;
+                    }
+                }
+
                 Ok(())
             }
 
@@ -1750,42 +1825,47 @@ impl CodeGenerator {
                     // Duplicate object for property access
                     self.emit_simple(Opcode::Dup);
 
-                    // Compile the property value
+                    // Compile the property value (getter/setter function or regular value)
                     self.gen_expr(&prop.value)?;
 
-                    // Set the property based on key type
-                    match &prop.key {
+                    // Get the property name as an atom
+                    let atom_idx = match &prop.key {
                         crate::compiler::ast::PropertyKey::Identifier(name) => {
-                            let atom_idx = self.get_or_create_atom(name);
-                            if atom_idx < 256 {
-                                self.emit(Instruction::with_atom8(Opcode::PutField8, atom_idx as u8));
-                            } else {
-                                self.emit(Instruction::with_u16(Opcode::PutField, atom_idx));
-                            }
+                            self.get_or_create_atom(name)
                         }
                         crate::compiler::ast::PropertyKey::Literal(lit) => {
-                            // Convert literal to string for property name
                             let name = match lit {
                                 crate::compiler::ast::Literal::String(s) => s.clone(),
                                 crate::compiler::ast::Literal::Number(n) => format!("{}", n),
                                 _ => "".to_string(),
                             };
-                            let atom_idx = self.get_or_create_atom(&name);
+                            self.get_or_create_atom(&name)
+                        }
+                        crate::compiler::ast::PropertyKey::Computed(_) => {
+                            // For computed properties, skip for now
+                            self.emit_simple(Opcode::Drop); // drop value
+                            self.emit_simple(Opcode::Drop); // drop dup'd obj
+                            continue;
+                        }
+                    };
+
+                    // Emit the appropriate opcode based on property kind
+                    match prop.kind {
+                        crate::compiler::ast::PropertyKind::Get => {
+                            // Stack: [obj, getter] -> [obj] (defines getter)
+                            self.emit(Instruction::with_u16(Opcode::DefineGetter, atom_idx));
+                        }
+                        crate::compiler::ast::PropertyKind::Set => {
+                            // Stack: [obj, setter] -> [obj] (defines setter)
+                            self.emit(Instruction::with_u16(Opcode::DefineSetter, atom_idx));
+                        }
+                        crate::compiler::ast::PropertyKind::Init => {
+                            // Stack: [obj, value] -> [obj] (sets property)
                             if atom_idx < 256 {
                                 self.emit(Instruction::with_atom8(Opcode::PutField8, atom_idx as u8));
                             } else {
                                 self.emit(Instruction::with_u16(Opcode::PutField, atom_idx));
                             }
-                        }
-                        crate::compiler::ast::PropertyKey::Computed(expr) => {
-                            // For computed properties, we need: [obj, key, value]
-                            // Current stack: [obj, obj, value]
-                            // We need to swap to get key in position
-                            // Actually let's re-do this:
-                            // Pop the value we just pushed, emit the key, then value, then PutArrayEl
-                            // This is complex, for now just skip computed properties
-                            self.emit_simple(Opcode::Drop); // drop value
-                            self.emit_simple(Opcode::Drop); // drop dup'd obj
                         }
                     }
                 }

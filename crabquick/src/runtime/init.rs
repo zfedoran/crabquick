@@ -574,28 +574,30 @@ fn install_math_object(ctx: &mut Context, global: JSValue) -> Result<(), JSValue
 
 /// Install Error constructors
 fn install_error_constructors(ctx: &mut Context, global: JSValue) -> Result<(), JSValue> {
-    // Create Error constructor (placeholder)
-    let error_ctor = ctx.new_object()
+    use crate::builtins::native_functions;
+
+    // Create Error constructor
+    let error_ctor = ctx.new_native_function(native_functions::error_constructor, 1)
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, global, "Error", error_ctor)?;
 
-    // Create TypeError constructor (placeholder)
-    let type_error_ctor = ctx.new_object()
+    // Create TypeError constructor
+    let type_error_ctor = ctx.new_native_function(native_functions::type_error_constructor, 1)
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, global, "TypeError", type_error_ctor)?;
 
-    // Create ReferenceError constructor (placeholder)
-    let ref_error_ctor = ctx.new_object()
+    // Create ReferenceError constructor
+    let ref_error_ctor = ctx.new_native_function(native_functions::reference_error_constructor, 1)
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, global, "ReferenceError", ref_error_ctor)?;
 
-    // Create RangeError constructor (placeholder)
-    let range_error_ctor = ctx.new_object()
+    // Create RangeError constructor
+    let range_error_ctor = ctx.new_native_function(native_functions::range_error_constructor, 1)
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, global, "RangeError", range_error_ctor)?;
 
-    // Create SyntaxError constructor (placeholder)
-    let syntax_error_ctor = ctx.new_object()
+    // Create SyntaxError constructor
+    let syntax_error_ctor = ctx.new_native_function(native_functions::syntax_error_constructor, 1)
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, global, "SyntaxError", syntax_error_ctor)?;
 

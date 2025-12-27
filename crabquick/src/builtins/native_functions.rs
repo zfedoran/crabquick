@@ -868,3 +868,102 @@ pub fn json_stringify_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]
 
     ctx.new_string(&result).map_err(|_| JSValue::exception())
 }
+
+// ========== Error Constructors ==========
+
+/// Error() constructor - creates an Error object
+pub fn error_constructor(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let error_obj = ctx.new_object()
+        .map_err(|_| JSValue::exception())?;
+
+    // Set the message property if provided
+    if let Some(msg) = args.get(0) {
+        let message_atom = crate::runtime::init::string_to_atom("message");
+        ctx.add_property(error_obj, message_atom, *msg, crate::object::PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    // Set the name property
+    let name_atom = crate::runtime::init::string_to_atom("name");
+    let name_val = ctx.new_string("Error").map_err(|_| JSValue::exception())?;
+    ctx.add_property(error_obj, name_atom, name_val, crate::object::PropertyFlags::default())
+        .map_err(|_| JSValue::exception())?;
+
+    Ok(error_obj)
+}
+
+/// TypeError() constructor
+pub fn type_error_constructor(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let error_obj = ctx.new_object()
+        .map_err(|_| JSValue::exception())?;
+
+    if let Some(msg) = args.get(0) {
+        let message_atom = crate::runtime::init::string_to_atom("message");
+        ctx.add_property(error_obj, message_atom, *msg, crate::object::PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    let name_atom = crate::runtime::init::string_to_atom("name");
+    let name_val = ctx.new_string("TypeError").map_err(|_| JSValue::exception())?;
+    ctx.add_property(error_obj, name_atom, name_val, crate::object::PropertyFlags::default())
+        .map_err(|_| JSValue::exception())?;
+
+    Ok(error_obj)
+}
+
+/// ReferenceError() constructor
+pub fn reference_error_constructor(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let error_obj = ctx.new_object()
+        .map_err(|_| JSValue::exception())?;
+
+    if let Some(msg) = args.get(0) {
+        let message_atom = crate::runtime::init::string_to_atom("message");
+        ctx.add_property(error_obj, message_atom, *msg, crate::object::PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    let name_atom = crate::runtime::init::string_to_atom("name");
+    let name_val = ctx.new_string("ReferenceError").map_err(|_| JSValue::exception())?;
+    ctx.add_property(error_obj, name_atom, name_val, crate::object::PropertyFlags::default())
+        .map_err(|_| JSValue::exception())?;
+
+    Ok(error_obj)
+}
+
+/// RangeError() constructor
+pub fn range_error_constructor(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let error_obj = ctx.new_object()
+        .map_err(|_| JSValue::exception())?;
+
+    if let Some(msg) = args.get(0) {
+        let message_atom = crate::runtime::init::string_to_atom("message");
+        ctx.add_property(error_obj, message_atom, *msg, crate::object::PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    let name_atom = crate::runtime::init::string_to_atom("name");
+    let name_val = ctx.new_string("RangeError").map_err(|_| JSValue::exception())?;
+    ctx.add_property(error_obj, name_atom, name_val, crate::object::PropertyFlags::default())
+        .map_err(|_| JSValue::exception())?;
+
+    Ok(error_obj)
+}
+
+/// SyntaxError() constructor
+pub fn syntax_error_constructor(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let error_obj = ctx.new_object()
+        .map_err(|_| JSValue::exception())?;
+
+    if let Some(msg) = args.get(0) {
+        let message_atom = crate::runtime::init::string_to_atom("message");
+        ctx.add_property(error_obj, message_atom, *msg, crate::object::PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    let name_atom = crate::runtime::init::string_to_atom("name");
+    let name_val = ctx.new_string("SyntaxError").map_err(|_| JSValue::exception())?;
+    ctx.add_property(error_obj, name_atom, name_val, crate::object::PropertyFlags::default())
+        .map_err(|_| JSValue::exception())?;
+
+    Ok(error_obj)
+}

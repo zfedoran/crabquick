@@ -1441,6 +1441,14 @@ impl VM {
                 }
             }
 
+            ClearCatchOffset => {
+                // Clear the catch offset so exceptions aren't caught by this try block
+                if let Ok(frame) = self.call_stack.current_mut() {
+                    frame.clear_catch_offset();
+                }
+                Ok(None)
+            }
+
             Rethrow => {
                 let exc = self.value_stack.pop()
                     .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
@@ -1945,9 +1953,21 @@ impl VM {
                     // Get property atom
                     let atom = self.get_atom_from_table(atom_idx as usize)?;
 
-                    // Get property value
-                    let value = ctx.get_property(obj, atom)
-                        .unwrap_or(JSValue::undefined());
+                    // Look up property with accessor info
+                    let value = match ctx.find_property_with_accessor(obj, atom) {
+                        crate::context::PropertyLookupResult::NotFound => JSValue::undefined(),
+                        crate::context::PropertyLookupResult::Value(v) => v,
+                        crate::context::PropertyLookupResult::Getter(getter) |
+                        crate::context::PropertyLookupResult::GetterSetter(getter, _) => {
+                            // Call the getter with this = obj
+                            ctx.call_function(getter, obj, &[])
+                                .unwrap_or(JSValue::undefined())
+                        }
+                        crate::context::PropertyLookupResult::Setter(_) => {
+                            // Setter-only property, return undefined
+                            JSValue::undefined()
+                        }
+                    };
 
                     // Push result
                     self.value_stack.push(value)
@@ -1967,9 +1987,21 @@ impl VM {
                     // Get property atom
                     let atom = self.get_atom_from_table(atom_idx as usize)?;
 
-                    // Get property value
-                    let value = ctx.get_property(obj, atom)
-                        .unwrap_or(JSValue::undefined());
+                    // Look up property with accessor info
+                    let value = match ctx.find_property_with_accessor(obj, atom) {
+                        crate::context::PropertyLookupResult::NotFound => JSValue::undefined(),
+                        crate::context::PropertyLookupResult::Value(v) => v,
+                        crate::context::PropertyLookupResult::Getter(getter) |
+                        crate::context::PropertyLookupResult::GetterSetter(getter, _) => {
+                            // Call the getter with this = obj
+                            ctx.call_function(getter, obj, &[])
+                                .unwrap_or(JSValue::undefined())
+                        }
+                        crate::context::PropertyLookupResult::Setter(_) => {
+                            // Setter-only property, return undefined
+                            JSValue::undefined()
+                        }
+                    };
 
                     // Push result
                     self.value_stack.push(value)
@@ -2044,6 +2076,48 @@ impl VM {
                     Ok(None)
                 } else {
                     Err(self.throw_error(ctx, "Invalid operand for SetField"))
+                }
+            }
+
+            DefineGetter => {
+                if let Operand::U16(atom_idx) = instruction.operand {
+                    // Stack: [obj, getter] -> [obj]
+                    let getter = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    let obj = self.value_stack.peek()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Get property atom
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
+
+                    // Define getter on object
+                    ctx.define_getter(obj, atom, getter)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for DefineGetter"))
+                }
+            }
+
+            DefineSetter => {
+                if let Operand::U16(atom_idx) = instruction.operand {
+                    // Stack: [obj, setter] -> [obj]
+                    let setter = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    let obj = self.value_stack.peek()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Get property atom
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
+
+                    // Define setter on object
+                    ctx.define_setter(obj, atom, setter)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for DefineSetter"))
                 }
             }
 
@@ -2297,6 +2371,42 @@ impl VM {
                     .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
 
                 // The decremented value should be stored by the calling code
+                Ok(None)
+            }
+
+            Arguments => {
+                // Create the arguments object - an array-like object containing all passed arguments
+                let (argc, base_sp) = if let Ok(frame) = self.call_stack.current() {
+                    (frame.argc as usize, frame.sp)
+                } else {
+                    (0, 0)
+                };
+
+                // Create an object to hold the arguments
+                let args_obj = ctx.new_object()
+                    .map_err(|_| self.throw_error(ctx, "Out of memory creating arguments object"))?;
+
+                // Add length property
+                let length_atom = crate::runtime::init::string_to_atom("length");
+                let length_val = JSValue::from_int(argc as i32);
+                ctx.add_property(args_obj, length_atom, length_val, crate::object::PropertyFlags::default())
+                    .map_err(|_| self.throw_error(ctx, "Failed to set length"))?;
+
+                // Copy all arguments into the object with numeric keys
+                for i in 0..argc {
+                    let arg_val = self.value_stack.get(base_sp + i)
+                        .map_err(|_| self.throw_error(ctx, "Invalid argument index"))?;
+
+                    let idx_str = alloc::format!("{}", i);
+                    let idx_atom = crate::runtime::init::string_to_atom(&idx_str);
+                    ctx.add_property(args_obj, idx_atom, arg_val, crate::object::PropertyFlags::default())
+                        .map_err(|_| self.throw_error(ctx, "Failed to set argument"))?;
+                }
+
+                // Push the arguments object onto the stack
+                self.value_stack.push(args_obj)
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+
                 Ok(None)
             }
 
@@ -2986,9 +3096,22 @@ impl VM {
                 }
                 _ => {
                     // For other opcodes, execute normally
-                    match self.execute_instruction(ctx, reader, &instruction)? {
-                        Some(ret) => return Ok(ret),
-                        None => continue,
+                    match self.execute_instruction(ctx, reader, &instruction) {
+                        Ok(Some(ret)) => return Ok(ret),
+                        Ok(None) => continue,
+                        Err(e) => {
+                            // Check if we have an exception handler in the current frame
+                            if let Ok(frame) = self.call_stack.current() {
+                                if let Some(catch_pc) = frame.catch_offset {
+                                    // Jump to exception handler
+                                    reader.set_pc(catch_pc);
+                                    self.value_stack.push(e)
+                                        .map_err(|_| self.throw_error(ctx, "Stack overflow in exception handler"))?;
+                                    continue;
+                                }
+                            }
+                            return Err(e);
+                        }
                     }
                 }
             }

@@ -421,7 +421,10 @@ impl<'a> Parser<'a> {
         let loc = self.current.location;
         self.expect(TokenKind::Return)?;
 
-        let argument = if self.consume_if(&TokenKind::Semicolon) {
+        // ASI: if there's a newline after return, or we have semicolon/rbrace/eof, don't parse expression
+        let argument = if self.consume_if(&TokenKind::Semicolon)
+            || self.current.had_newline
+            || matches!(self.current.kind, TokenKind::RBrace | TokenKind::Eof) {
             None
         } else {
             let arg = Some(self.parse_expression()?);
@@ -437,7 +440,8 @@ impl<'a> Parser<'a> {
         let loc = self.current.location;
         self.expect(TokenKind::Break)?;
 
-        let label = if matches!(self.current.kind, TokenKind::Identifier(_)) {
+        // Only parse label if there was no newline before the identifier (ASI)
+        let label = if !self.current.had_newline && matches!(self.current.kind, TokenKind::Identifier(_)) {
             Some(self.parse_identifier()?)
         } else {
             None
@@ -453,7 +457,8 @@ impl<'a> Parser<'a> {
         let loc = self.current.location;
         self.expect(TokenKind::Continue)?;
 
-        let label = if matches!(self.current.kind, TokenKind::Identifier(_)) {
+        // Only parse label if there was no newline before the identifier (ASI)
+        let label = if !self.current.had_newline && matches!(self.current.kind, TokenKind::Identifier(_)) {
             Some(self.parse_identifier()?)
         } else {
             None
@@ -1495,48 +1500,8 @@ impl<'a> Parser<'a> {
         let mut properties = Vec::new();
 
         while !self.consume_if(&TokenKind::RBrace) {
-            let key = match &self.current.kind.clone() {
-                TokenKind::Identifier(name) => {
-                    let name = name.clone();
-                    self.advance();
-                    PropertyKey::Identifier(name)
-                }
-                TokenKind::String(s) => {
-                    let s = s.clone();
-                    self.advance();
-                    PropertyKey::Literal(Literal::String(s))
-                }
-                TokenKind::Number(n) => {
-                    let n = *n;
-                    self.advance();
-                    PropertyKey::Literal(Literal::Number(n))
-                }
-                TokenKind::LBracket => {
-                    self.advance();
-                    let expr = self.parse_assignment_expression()?;
-                    self.expect(TokenKind::RBracket)?;
-                    PropertyKey::Computed(Box::new(expr))
-                }
-                // Reserved words can be used as property keys
-                kind if kind.is_reserved_word() => {
-                    let name = kind.as_property_name().unwrap_or_default();
-                    self.advance();
-                    PropertyKey::Identifier(name)
-                }
-                _ => return Err(ParseError::new(
-                    "Expected property key".to_string(),
-                    self.current.location,
-                )),
-            };
-
-            self.expect(TokenKind::Colon)?;
-            let value = self.parse_assignment_expression()?;
-
-            properties.push(Property {
-                key,
-                value,
-                kind: PropertyKind::Init,
-            });
+            let prop = self.parse_object_property()?;
+            properties.push(prop);
 
             if !self.consume_if(&TokenKind::Comma) {
                 self.expect(TokenKind::RBrace)?;
@@ -1545,6 +1510,144 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Expr::Object { properties, loc })
+    }
+
+    /// Parses a single object property (handles get/set/method/regular)
+    fn parse_object_property(&mut self) -> ParseResult<Property> {
+        let prop_loc = self.current.location;
+
+        // Check for getter/setter: get/set followed by property name
+        if let TokenKind::Identifier(name) = &self.current.kind.clone() {
+            let is_get = name == "get";
+            let is_set = name == "set";
+
+            if is_get || is_set {
+                // Peek at next token to determine if this is getter/setter or regular property
+                let next_kind = self.peek().kind.clone();
+
+                // If followed by : , } ( then it's a regular property or method named "get"/"set"
+                let is_regular = matches!(next_kind,
+                    TokenKind::Colon | TokenKind::Comma | TokenKind::RBrace | TokenKind::LParen);
+
+                if !is_regular {
+                    // It's a getter or setter
+                    self.advance(); // consume 'get' or 'set'
+
+                    // Parse the property name
+                    let key = self.parse_property_key()?;
+
+                    // Parse parameter list
+                    self.expect(TokenKind::LParen)?;
+                    let params = if is_set {
+                        // Setter has exactly one parameter
+                        let param = self.parse_identifier()?;
+                        self.expect(TokenKind::RParen)?;
+                        vec![param]
+                    } else {
+                        // Getter has no parameters
+                        self.expect(TokenKind::RParen)?;
+                        vec![]
+                    };
+
+                    // Parse function body
+                    self.expect(TokenKind::LBrace)?;
+                    let body = self.parse_statement_list()?;
+                    self.expect(TokenKind::RBrace)?;
+
+                    let value = Expr::Function {
+                        name: None,
+                        params,
+                        body,
+                        loc: prop_loc,
+                    };
+
+                    return Ok(Property {
+                        key,
+                        value,
+                        kind: if is_get { PropertyKind::Get } else { PropertyKind::Set },
+                    });
+                }
+            }
+        }
+
+        // Parse regular property key
+        let key = self.parse_property_key()?;
+
+        // Check what follows the key
+        match &self.current.kind {
+            TokenKind::LParen => {
+                // Shorthand method: { f() { ... } }
+                self.advance(); // consume '('
+                let params = self.parse_parameter_list()?;
+                self.expect(TokenKind::RParen)?;
+                self.expect(TokenKind::LBrace)?;
+                let body = self.parse_statement_list()?;
+                self.expect(TokenKind::RBrace)?;
+
+                let value = Expr::Function {
+                    name: None,
+                    params,
+                    body,
+                    loc: prop_loc,
+                };
+
+                Ok(Property {
+                    key,
+                    value,
+                    kind: PropertyKind::Init,
+                })
+            }
+            TokenKind::Colon => {
+                // Regular property: { x: value }
+                self.advance(); // consume ':'
+                let value = self.parse_assignment_expression()?;
+                Ok(Property {
+                    key,
+                    value,
+                    kind: PropertyKind::Init,
+                })
+            }
+            _ => Err(ParseError::new(
+                format!("Expected ':' or '(' after property key, found {:?}", self.current.kind),
+                self.current.location,
+            )),
+        }
+    }
+
+    /// Parses a property key (identifier, string, number, computed, or reserved word)
+    fn parse_property_key(&mut self) -> ParseResult<PropertyKey> {
+        match &self.current.kind.clone() {
+            TokenKind::Identifier(name) => {
+                let name = name.clone();
+                self.advance();
+                Ok(PropertyKey::Identifier(name))
+            }
+            TokenKind::String(s) => {
+                let s = s.clone();
+                self.advance();
+                Ok(PropertyKey::Literal(Literal::String(s)))
+            }
+            TokenKind::Number(n) => {
+                let n = *n;
+                self.advance();
+                Ok(PropertyKey::Literal(Literal::Number(n)))
+            }
+            TokenKind::LBracket => {
+                self.advance();
+                let expr = self.parse_assignment_expression()?;
+                self.expect(TokenKind::RBracket)?;
+                Ok(PropertyKey::Computed(Box::new(expr)))
+            }
+            kind if kind.is_reserved_word() => {
+                let name = kind.as_property_name().unwrap_or_default();
+                self.advance();
+                Ok(PropertyKey::Identifier(name))
+            }
+            _ => Err(ParseError::new(
+                "Expected property key".to_string(),
+                self.current.location,
+            )),
+        }
     }
 
     /// Parses a function expression

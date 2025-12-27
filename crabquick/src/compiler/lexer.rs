@@ -279,12 +279,19 @@ pub struct Token {
     pub kind: TokenKind,
     /// Source location
     pub location: SourceLocation,
+    /// True if there was a newline before this token
+    pub had_newline: bool,
 }
 
 impl Token {
     /// Creates a new token
     pub fn new(kind: TokenKind, location: SourceLocation) -> Self {
-        Token { kind, location }
+        Token { kind, location, had_newline: false }
+    }
+
+    /// Creates a new token with newline flag
+    pub fn with_newline(kind: TokenKind, location: SourceLocation, had_newline: bool) -> Self {
+        Token { kind, location, had_newline }
     }
 }
 
@@ -300,6 +307,8 @@ pub struct Lexer<'a> {
     line: u32,
     /// Current column number (1-based)
     column: u32,
+    /// True if we saw a newline while skipping whitespace
+    saw_newline: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -311,6 +320,7 @@ impl<'a> Lexer<'a> {
             pos: 0,
             line: 1,
             column: 1,
+            saw_newline: false,
         }
     }
 
@@ -344,10 +354,13 @@ impl<'a> Lexer<'a> {
         Some(ch)
     }
 
-    /// Skips whitespace
+    /// Skips whitespace and tracks newlines
     fn skip_whitespace(&mut self) {
         while let Some(ch) = self.peek() {
             if ch.is_whitespace() {
+                if ch == '\n' {
+                    self.saw_newline = true;
+                }
                 self.consume();
             } else {
                 break;
@@ -365,6 +378,7 @@ impl<'a> Lexer<'a> {
         while let Some(ch) = self.peek() {
             self.consume();
             if ch == '\n' {
+                self.saw_newline = true;
                 break;
             }
         }
@@ -386,6 +400,10 @@ impl<'a> Lexer<'a> {
                         self.consume();
                         break;
                     }
+                }
+                Some('\n') => {
+                    self.saw_newline = true;
+                    self.consume();
                 }
                 Some(_) => {
                     self.consume();
@@ -712,6 +730,9 @@ impl<'a> Lexer<'a> {
 
     /// Returns the next token
     pub fn next_token(&mut self) -> Token {
+        // Reset newline flag
+        self.saw_newline = false;
+
         // Skip whitespace and comments
         loop {
             self.skip_whitespace();
@@ -726,7 +747,7 @@ impl<'a> Lexer<'a> {
                     Some('*') => {
                         let loc = self.location();
                         if let Err(err) = self.skip_block_comment() {
-                            return Token::new(TokenKind::Error(err), loc);
+                            return Token::with_newline(TokenKind::Error(err), loc, self.saw_newline);
                         }
                         continue;
                     }
@@ -738,17 +759,18 @@ impl<'a> Lexer<'a> {
         }
 
         let loc = self.location();
+        let had_newline = self.saw_newline;
 
         // Check for EOF
         let ch = match self.peek() {
-            None => return Token::new(TokenKind::Eof, loc),
+            None => return Token::with_newline(TokenKind::Eof, loc, had_newline),
             Some(ch) => ch,
         };
 
         // Identifier or keyword
         if Self::is_identifier_start(ch) {
             let kind = self.read_identifier();
-            return Token::new(kind, loc);
+            return Token::with_newline(kind, loc, had_newline);
         }
 
         // Number
@@ -757,7 +779,7 @@ impl<'a> Lexer<'a> {
                 Ok(k) => k,
                 Err(err) => TokenKind::Error(err),
             };
-            return Token::new(kind, loc);
+            return Token::with_newline(kind, loc, had_newline);
         }
 
         // String
@@ -766,7 +788,7 @@ impl<'a> Lexer<'a> {
                 Ok(k) => k,
                 Err(err) => TokenKind::Error(err),
             };
-            return Token::new(kind, loc);
+            return Token::with_newline(kind, loc, had_newline);
         }
 
         // Operators and punctuation
@@ -962,7 +984,7 @@ impl<'a> Lexer<'a> {
             _ => TokenKind::Error(format!("Unexpected character: '{}'", ch)),
         };
 
-        Token::new(kind, loc)
+        Token::with_newline(kind, loc, had_newline)
     }
 
     /// Peeks at the next token without consuming it
@@ -970,12 +992,14 @@ impl<'a> Lexer<'a> {
         let saved_pos = self.pos;
         let saved_line = self.line;
         let saved_column = self.column;
+        let saved_saw_newline = self.saw_newline;
 
         let token = self.next_token();
 
         self.pos = saved_pos;
         self.line = saved_line;
         self.column = saved_column;
+        self.saw_newline = saved_saw_newline;
 
         token
     }

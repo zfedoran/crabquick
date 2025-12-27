@@ -387,6 +387,8 @@ pub enum Opcode {
     SetVarRefCheck = 245,
 
     // ===== Exception Handling =====
+    /// Clear catch offset (after try block completes normally)
+    ClearCatchOffset = 248,
     /// Throw exception
     Throw = 250,
     /// Throw error (from type)
@@ -630,6 +632,7 @@ impl Opcode {
             Opcode::SetVarRefCheck => "set_var_ref_check",
 
             // Exception handling
+            Opcode::ClearCatchOffset => "clear_catch_offset",
             Opcode::Throw => "throw",
             Opcode::ThrowError => "throw_error",
             Opcode::Catch => "catch",
@@ -669,7 +672,7 @@ impl Opcode {
             Opcode::Shl | Opcode::Sar | Opcode::Shr |
             Opcode::Return | Opcode::ReturnUndef |
             Opcode::GetArrayEl | Opcode::PutArrayEl | Opcode::SetArrayEl |
-            Opcode::GetLength | Opcode::Throw | Opcode::Catch | Opcode::Rethrow |
+            Opcode::GetLength | Opcode::ClearCatchOffset | Opcode::Throw | Opcode::Catch | Opcode::Rethrow |
             Opcode::GetIterator | Opcode::GetAsyncIterator | Opcode::IteratorNext |
             Opcode::IteratorClose | Opcode::IteratorCheckObject |
             Opcode::TypeOf | Opcode::Delete | Opcode::DeleteVar | Opcode::Void |
@@ -701,7 +704,7 @@ impl Opcode {
             Opcode::GetField | Opcode::PutField | Opcode::DefineField | Opcode::SetField |
             Opcode::GetPrivateField | Opcode::PutPrivateField |
             Opcode::GetSuper | Opcode::PutSuper | Opcode::DefineArrayEl | Opcode::SetSuper |
-            Opcode::PushFunc => U16,
+            Opcode::PushFunc | Opcode::DefineGetter | Opcode::DefineSetter => U16,
 
             // I16 operands
             Opcode::PushI16 => I16,
@@ -731,7 +734,7 @@ impl Opcode {
             // Other special cases
             Opcode::SpreadArray | Opcode::SpreadObject |
             Opcode::CopyDataProperties | Opcode::DefinePrivateField |
-            Opcode::DefineMethod | Opcode::DefineGetter | Opcode::DefineSetter |
+            Opcode::DefineMethod |
             Opcode::DefineClassName | Opcode::Arguments | Opcode::RestArgs |
             Opcode::DefineClass | Opcode::SetHomeObject | Opcode::SetName |
             Opcode::SetProto | Opcode::SetVarRefThis |
