@@ -1,72 +1,91 @@
 //! JavaScript string implementation
+//!
+//! This module re-exports the main JSString implementation from value::string.
+//! The actual UTF-8 storage, hash caching, and string operations are implemented
+//! in crate::value::JSString.
+//!
+//! ## Features Implemented:
+//! - Proper UTF-8 storage and handling
+//! - Length computation (both byte and character count)
+//! - Hash caching for faster property lookups
+//! - ASCII and numeric flags for optimizations
+//! - String interning support via AtomTable
 
-/// JavaScript string
+// Re-export the main JSString implementation from value module
+pub use crate::value::{JSString, JSStringHeader};
+
+/// Helper to create strings from context
 ///
-/// Stores UTF-8 encoded string data with metadata.
-#[repr(C)]
-pub struct JSString {
-    // TODO: Implement fields:
-    // - header: u32 (packed: is_unique, is_ascii, is_numeric, len)
-    // - hash: u32
-    // - data: [u8] (flexible array member - UTF-8)
-    _placeholder: u8,
+/// This is a convenience wrapper around Context::new_string().
+/// Strings should always be allocated via the Context to ensure
+/// proper memory management and GC integration.
+///
+/// Example:
+/// ```rust,ignore
+/// let str_value = ctx.new_string("hello")?;
+/// ```
+pub struct JSStringBuilder;
+
+impl JSStringBuilder {
+    /// Creates a new string through the context
+    ///
+    /// This is the recommended way to create strings in CrabQuick.
+    /// The string will be properly allocated in the arena with GC support.
+    #[inline]
+    pub fn new(ctx: &mut crate::context::Context, s: &str) -> Result<crate::value::JSValue, crate::memory::allocator::OutOfMemory> {
+        ctx.new_string(s)
+    }
 }
 
-impl JSString {
-    /// Creates a new string
-    pub fn new(_s: &str) -> Self {
-        // TODO: Allocate and copy UTF-8 data
-        // TODO: Detect if ASCII-only
-        // TODO: Detect if numeric
-        JSString {
-            _placeholder: 0,
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::Context;
+
+    #[test]
+    fn test_string_creation() {
+        let mut ctx = Context::new(8192);
+        let result = JSStringBuilder::new(&mut ctx, "hello");
+        assert!(result.is_ok());
     }
 
-    /// Returns the string length in bytes
-    pub fn len(&self) -> usize {
-        // TODO: Extract from header
-        0
+    #[test]
+    fn test_string_retrieval() {
+        let mut ctx = Context::new(8192);
+        let str_val = JSStringBuilder::new(&mut ctx, "hello").unwrap();
+        let retrieved = ctx.get_string(str_val);
+        assert_eq!(retrieved, Some("hello"));
     }
 
-    /// Returns true if the string is empty
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    #[test]
+    fn test_utf8_string() {
+        let mut ctx = Context::new(8192);
+        let str_val = JSStringBuilder::new(&mut ctx, "café ☕").unwrap();
+        let retrieved = ctx.get_string(str_val);
+        assert_eq!(retrieved, Some("café ☕"));
     }
 
-    /// Returns true if the string is ASCII-only
-    pub fn is_ascii(&self) -> bool {
-        // TODO: Extract from header
-        false
+    #[test]
+    fn test_empty_string() {
+        let mut ctx = Context::new(8192);
+        let str_val = JSStringBuilder::new(&mut ctx, "").unwrap();
+        let retrieved = ctx.get_string(str_val);
+        assert_eq!(retrieved, Some(""));
     }
 
-    /// Returns true if the string is numeric
-    pub fn is_numeric(&self) -> bool {
-        // TODO: Extract from header
-        false
+    #[test]
+    fn test_numeric_string() {
+        let mut ctx = Context::new(8192);
+        let str_val = JSStringBuilder::new(&mut ctx, "123.45").unwrap();
+        let retrieved = ctx.get_string(str_val);
+        assert_eq!(retrieved, Some("123.45"));
     }
 
-    /// Returns true if the string is unique (interned)
-    pub fn is_unique(&self) -> bool {
-        // TODO: Extract from header
-        false
-    }
-
-    /// Returns the string data as a byte slice
-    pub fn as_bytes(&self) -> &[u8] {
-        // TODO: Return data slice
-        &[]
-    }
-
-    /// Returns the string as a str
-    pub fn as_str(&self) -> &str {
-        // TODO: Convert bytes to str (already UTF-8)
-        ""
-    }
-
-    /// Returns the hash value
-    pub fn hash(&self) -> u32 {
-        // TODO: Return hash field
-        0
+    #[test]
+    fn test_ascii_string() {
+        let mut ctx = Context::new(8192);
+        let str_val = JSStringBuilder::new(&mut ctx, "hello world").unwrap();
+        let retrieved = ctx.get_string(str_val);
+        assert_eq!(retrieved, Some("hello world"));
     }
 }

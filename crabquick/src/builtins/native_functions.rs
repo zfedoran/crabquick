@@ -350,6 +350,75 @@ pub fn object_assign_native(ctx: &mut Context, _this: JSValue, args: &[JSValue])
     object::object_assign(ctx, target, sources)
 }
 
+// ========== Global Functions ==========
+
+/// parseInt() wrapper
+pub fn parse_int_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::globals::parse_int;
+    use crate::runtime::conversion::to_int32;
+
+    let string = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let radix = args.get(1).map(|v| to_int32(ctx, *v));
+
+    Ok(parse_int(ctx, string, radix))
+}
+
+/// parseFloat() wrapper
+pub fn parse_float_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::globals::parse_float;
+
+    let string = args.get(0).copied().unwrap_or(JSValue::undefined());
+    Ok(parse_float(ctx, string))
+}
+
+/// isNaN() wrapper
+pub fn is_nan_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::globals::is_nan;
+
+    let value = args.get(0).copied().unwrap_or(JSValue::undefined());
+    Ok(JSValue::bool(is_nan(ctx, value)))
+}
+
+/// isFinite() wrapper
+pub fn is_finite_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::globals::is_finite;
+
+    let value = args.get(0).copied().unwrap_or(JSValue::undefined());
+    Ok(JSValue::bool(is_finite(ctx, value)))
+}
+
+/// encodeURI() wrapper
+pub fn encode_uri_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::globals::encode_uri;
+
+    let uri = args.get(0).copied().unwrap_or(JSValue::undefined());
+    encode_uri(ctx, uri)
+}
+
+/// decodeURI() wrapper
+pub fn decode_uri_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::globals::decode_uri;
+
+    let uri = args.get(0).copied().unwrap_or(JSValue::undefined());
+    decode_uri(ctx, uri)
+}
+
+/// encodeURIComponent() wrapper
+pub fn encode_uri_component_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::globals::encode_uri_component;
+
+    let component = args.get(0).copied().unwrap_or(JSValue::undefined());
+    encode_uri_component(ctx, component)
+}
+
+/// decodeURIComponent() wrapper
+pub fn decode_uri_component_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::globals::decode_uri_component;
+
+    let component = args.get(0).copied().unwrap_or(JSValue::undefined());
+    decode_uri_component(ctx, component)
+}
+
 // ========== Function.prototype Methods ==========
 
 /// Function.prototype.call() wrapper

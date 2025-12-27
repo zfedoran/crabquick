@@ -20,17 +20,13 @@ use core::str::FromStr;
 ///
 /// Parsed integer or NaN if parsing fails
 pub fn parse_int(ctx: &mut Context, string: JSValue, radix: Option<i32>) -> JSValue {
-    // Get string representation
-    let s = if let Some(str_ref) = ctx.get_string(string) {
-        str_ref.trim_start()
-    } else {
-        // Try to convert to string first
-        return JSValue::from_int(0); // Simplified: return 0 for non-strings
-    };
+    use crate::runtime::conversion::to_string;
 
-    let radix = radix.unwrap_or(10).clamp(2, 36);
+    // Convert to string first
+    let s = to_string(ctx, string);
+    let s = s.trim_start();
 
-    // Handle empty string
+    // Handle empty string after trimming
     if s.is_empty() {
         return ctx.new_number(f64::NAN).unwrap_or(JSValue::undefined());
     }
@@ -44,21 +40,44 @@ pub fn parse_int(ctx: &mut Context, string: JSValue, radix: Option<i32>) -> JSVa
         (1.0, s)
     };
 
-    // Try to parse as i32 first for common case
-    if radix == 10 {
-        if let Ok(n) = s.parse::<i32>() {
-            return JSValue::from_int((n as f64 * sign) as i32);
+    // Determine radix
+    let mut actual_radix = radix.unwrap_or(0);
+    let mut s = s;
+
+    // Handle "0x" or "0X" prefix for hex
+    if actual_radix == 0 || actual_radix == 16 {
+        if s.len() >= 2 && (s.starts_with("0x") || s.starts_with("0X")) {
+            actual_radix = 16;
+            s = &s[2..];
         }
     }
 
-    // Simplified: parse what we can
+    // Default to radix 10 if not specified
+    if actual_radix == 0 {
+        actual_radix = 10;
+    }
+
+    // Validate radix range
+    if actual_radix < 2 || actual_radix > 36 {
+        return ctx.new_number(f64::NAN).unwrap_or(JSValue::undefined());
+    }
+
+    // Parse digits until we hit an invalid character
     let mut result = 0i64;
+    let mut parsed_any = false;
+
     for c in s.chars() {
-        if let Some(digit) = c.to_digit(radix as u32) {
-            result = result * radix as i64 + digit as i64;
+        if let Some(digit) = c.to_digit(actual_radix as u32) {
+            result = result.saturating_mul(actual_radix as i64).saturating_add(digit as i64);
+            parsed_any = true;
         } else {
-            break; // Stop at first invalid character
+            break; // Stop at first invalid character (JavaScript behavior)
         }
+    }
+
+    // If no valid digits were parsed, return NaN
+    if !parsed_any {
+        return ctx.new_number(f64::NAN).unwrap_or(JSValue::undefined());
     }
 
     ctx.new_number(result as f64 * sign).unwrap_or(JSValue::undefined())
@@ -75,15 +94,75 @@ pub fn parse_int(ctx: &mut Context, string: JSValue, radix: Option<i32>) -> JSVa
 ///
 /// Parsed number or NaN if parsing fails
 pub fn parse_float(ctx: &mut Context, string: JSValue) -> JSValue {
-    let s = if let Some(str_ref) = ctx.get_string(string) {
-        str_ref.trim_start()
-    } else {
-        return ctx.new_number(f64::NAN).unwrap_or(JSValue::undefined());
-    };
+    use crate::runtime::conversion::to_string;
 
-    match f64::from_str(s) {
+    // Convert to string first
+    let s = to_string(ctx, string);
+    let s = s.trim_start();
+
+    // Handle empty string
+    if s.is_empty() {
+        return ctx.new_number(f64::NAN).unwrap_or(JSValue::undefined());
+    }
+
+    // Try to parse as much as possible (JavaScript parseFloat is lenient)
+    // It parses until it hits an invalid character
+    let mut end_idx = 0;
+    let mut has_dot = false;
+    let mut has_e = false;
+    let mut chars = s.chars().peekable();
+
+    // Handle sign
+    if let Some(&c) = chars.peek() {
+        if c == '+' || c == '-' {
+            end_idx += 1;
+            chars.next();
+        }
+    }
+
+    // Parse number
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() {
+            end_idx += 1;
+            chars.next();
+        } else if c == '.' && !has_dot && !has_e {
+            has_dot = true;
+            end_idx += 1;
+            chars.next();
+        } else if (c == 'e' || c == 'E') && !has_e {
+            has_e = true;
+            end_idx += 1;
+            chars.next();
+            // Handle sign after 'e'
+            if let Some(&next_c) = chars.peek() {
+                if next_c == '+' || next_c == '-' {
+                    end_idx += 1;
+                    chars.next();
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Parse the valid portion
+    let parse_str = &s[..end_idx];
+    if parse_str.is_empty() || parse_str == "+" || parse_str == "-" {
+        return ctx.new_number(f64::NAN).unwrap_or(JSValue::undefined());
+    }
+
+    match f64::from_str(parse_str) {
         Ok(n) => ctx.new_number(n).unwrap_or(JSValue::undefined()),
-        Err(_) => ctx.new_number(f64::NAN).unwrap_or(JSValue::undefined()),
+        Err(_) => {
+            // Handle special JavaScript values
+            if s.starts_with("Infinity") || s.starts_with("+Infinity") {
+                ctx.new_number(f64::INFINITY).unwrap_or(JSValue::undefined())
+            } else if s.starts_with("-Infinity") {
+                ctx.new_number(f64::NEG_INFINITY).unwrap_or(JSValue::undefined())
+            } else {
+                ctx.new_number(f64::NAN).unwrap_or(JSValue::undefined())
+            }
+        }
     }
 }
 
@@ -98,12 +177,11 @@ pub fn parse_float(ctx: &mut Context, string: JSValue) -> JSValue {
 ///
 /// true if the value is NaN, false otherwise
 pub fn is_nan(ctx: &Context, value: JSValue) -> bool {
-    if let Some(n) = ctx.get_number(value) {
-        n.is_nan()
-    } else {
-        // Non-numbers convert to NaN
-        true
-    }
+    use crate::runtime::conversion::to_number;
+
+    // JavaScript isNaN applies ToNumber conversion first
+    let num = to_number(ctx, value);
+    num.is_nan()
 }
 
 /// isFinite() - Determines whether a value is a finite number
@@ -117,45 +195,170 @@ pub fn is_nan(ctx: &Context, value: JSValue) -> bool {
 ///
 /// true if the value is finite, false otherwise
 pub fn is_finite(ctx: &Context, value: JSValue) -> bool {
-    if let Some(n) = ctx.get_number(value) {
-        n.is_finite()
-    } else {
-        false
-    }
+    use crate::runtime::conversion::to_number;
+
+    // JavaScript isFinite applies ToNumber conversion first
+    let num = to_number(ctx, value);
+    num.is_finite()
 }
 
 /// encodeURI() - Encodes a URI by escaping certain characters
 ///
-/// Simplified implementation that handles basic cases
-pub fn encode_uri(_ctx: &mut Context, uri: JSValue) -> Result<JSValue, JSValue> {
-    // TODO: Implement proper URI encoding
-    // For now, just return the input unchanged
-    Ok(uri)
+/// Encodes all characters except: A-Z a-z 0-9 ; , / ? : @ & = + $ - _ . ! ~ * ' ( ) #
+pub fn encode_uri(ctx: &mut Context, uri: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::conversion::to_string;
+    use alloc::string::String;
+
+    let s = to_string(ctx, uri);
+    let mut result = String::new();
+
+    for c in s.chars() {
+        if is_uri_reserved(c) || is_uri_unreserved(c) || c == '#' {
+            result.push(c);
+        } else {
+            // Percent-encode the character
+            let mut buf = [0u8; 4];
+            let encoded = c.encode_utf8(&mut buf);
+            for byte in encoded.bytes() {
+                result.push('%');
+                result.push_str(&alloc::format!("{:02X}", byte));
+            }
+        }
+    }
+
+    ctx.new_string(&result)
+        .map_err(|_| ctx.new_string("Out of memory").unwrap_or(JSValue::undefined()))
 }
 
 /// decodeURI() - Decodes a URI by unescaping encoded characters
 ///
-/// Simplified implementation that handles basic cases
-pub fn decode_uri(_ctx: &mut Context, uri: JSValue) -> Result<JSValue, JSValue> {
-    // TODO: Implement proper URI decoding
-    // For now, just return the input unchanged
-    Ok(uri)
+/// Decodes percent-encoded sequences except for reserved characters
+pub fn decode_uri(ctx: &mut Context, uri: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::conversion::to_string;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    let s = to_string(ctx, uri);
+    let chars: Vec<char> = s.chars().collect();
+    let mut result = String::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '%' && i + 2 < chars.len() {
+            // Try to decode the percent-encoded sequence
+            let hex = alloc::format!("{}{}", chars[i + 1], chars[i + 2]);
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                // Check if this is part of a multi-byte UTF-8 sequence
+                let decoded_char = char::from_u32(byte as u32);
+                if let Some(c) = decoded_char {
+                    // Don't decode reserved characters in decodeURI
+                    if is_uri_reserved(c) || c == '#' {
+                        result.push('%');
+                        result.push(chars[i + 1]);
+                        result.push(chars[i + 2]);
+                    } else {
+                        result.push(c);
+                    }
+                } else {
+                    // Invalid sequence, keep as-is
+                    result.push('%');
+                    result.push(chars[i + 1]);
+                    result.push(chars[i + 2]);
+                }
+                i += 3;
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    ctx.new_string(&result)
+        .map_err(|_| ctx.new_string("URI malformed").unwrap_or(JSValue::undefined()))
 }
 
 /// encodeURIComponent() - Encodes a URI component
 ///
-/// Simplified implementation
-pub fn encode_uri_component(_ctx: &mut Context, component: JSValue) -> Result<JSValue, JSValue> {
-    // TODO: Implement proper URI component encoding
-    Ok(component)
+/// Encodes all characters except: A-Z a-z 0-9 - _ . ! ~ * ' ( )
+pub fn encode_uri_component(ctx: &mut Context, component: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::conversion::to_string;
+    use alloc::string::String;
+
+    let s = to_string(ctx, component);
+    let mut result = String::new();
+
+    for c in s.chars() {
+        if is_uri_unreserved(c) {
+            result.push(c);
+        } else {
+            // Percent-encode the character
+            let mut buf = [0u8; 4];
+            let encoded = c.encode_utf8(&mut buf);
+            for byte in encoded.bytes() {
+                result.push('%');
+                result.push_str(&alloc::format!("{:02X}", byte));
+            }
+        }
+    }
+
+    ctx.new_string(&result)
+        .map_err(|_| ctx.new_string("Out of memory").unwrap_or(JSValue::undefined()))
 }
 
 /// decodeURIComponent() - Decodes a URI component
 ///
-/// Simplified implementation
-pub fn decode_uri_component(_ctx: &mut Context, component: JSValue) -> Result<JSValue, JSValue> {
-    // TODO: Implement proper URI component decoding
-    Ok(component)
+/// Decodes all percent-encoded sequences
+pub fn decode_uri_component(ctx: &mut Context, component: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::conversion::to_string;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    let s = to_string(ctx, component);
+    let chars: Vec<char> = s.chars().collect();
+    let mut result = String::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '%' && i + 2 < chars.len() {
+            // Try to decode the percent-encoded sequence
+            let hex = alloc::format!("{}{}", chars[i + 1], chars[i + 2]);
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                // Simple single-byte decoding (UTF-8 multi-byte sequences would need more work)
+                let decoded_char = char::from_u32(byte as u32);
+                if let Some(c) = decoded_char {
+                    result.push(c);
+                } else {
+                    // Invalid sequence, keep as-is
+                    result.push('%');
+                    result.push(chars[i + 1]);
+                    result.push(chars[i + 2]);
+                }
+                i += 3;
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    ctx.new_string(&result)
+        .map_err(|_| ctx.new_string("URI malformed").unwrap_or(JSValue::undefined()))
+}
+
+/// Check if a character is a URI reserved character
+fn is_uri_reserved(c: char) -> bool {
+    matches!(c, ';' | ',' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$')
+}
+
+/// Check if a character is a URI unreserved character
+fn is_uri_unreserved(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')')
 }
 
 /// eval() - Evaluates JavaScript code from a string
