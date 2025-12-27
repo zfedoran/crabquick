@@ -267,10 +267,11 @@ impl VM {
         vm_ptr: core::ptr::NonNull<u8>,
         ctx: &mut Context,
         func: JSValue,
+        this_val: JSValue,
         args: &[JSValue],
     ) -> Result<JSValue, JSValue> {
         let vm = &mut *(vm_ptr.as_ptr() as *mut VM);
-        vm.call_function_internal(ctx, func, args)
+        vm.call_function_internal(ctx, func, this_val, args)
     }
 
     /// Internal function call used by reentrant handler
@@ -278,6 +279,7 @@ impl VM {
         &mut self,
         ctx: &mut Context,
         func: JSValue,
+        this_val: JSValue,
         args: &[JSValue],
     ) -> Result<JSValue, JSValue> {
         // Check if it's a closure
@@ -318,8 +320,8 @@ impl VM {
                     .map_err(|_| self.throw_error(ctx, "Invalid self_name_slot"))?;
             }
 
-            // Push a call frame
-            let frame = StackFrame::new_closure(func, base_sp, padded_args.len() as u16, JSValue::undefined(), closure_idx);
+            // Push a call frame with this_val
+            let frame = StackFrame::new_closure(func, base_sp, padded_args.len() as u16, this_val, closure_idx);
             self.call_stack.push(frame)
                 .map_err(|_| self.throw_error(ctx, "Call stack overflow"))?;
 
@@ -359,7 +361,7 @@ impl VM {
                     .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
             }
 
-            let frame = StackFrame::new(func, base_sp, padded_args.len() as u16, JSValue::undefined());
+            let frame = StackFrame::new(func, base_sp, padded_args.len() as u16, this_val);
             self.call_stack.push(frame)
                 .map_err(|_| self.throw_error(ctx, "Call stack overflow"))?;
 

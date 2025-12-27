@@ -25,6 +25,7 @@ pub type ReentrantCallFn = unsafe fn(
     vm_ptr: core::ptr::NonNull<u8>,
     ctx: &mut Context,
     func: JSValue,
+    this_val: JSValue,
     args: &[JSValue],
 ) -> Result<JSValue, JSValue>;
 
@@ -37,6 +38,10 @@ pub struct Context {
     atom_table: AtomTable,
     /// Global object (null until initialized)
     global_object: JSValue,
+    /// Object.prototype (null until initialized)
+    object_prototype: JSValue,
+    /// Function.prototype (null until initialized)
+    function_prototype: JSValue,
     /// Current exception value (if any)
     exception_value: JSValue,
     /// Raw pointer to VM for reentrant calls (set by VM during execution)
@@ -66,6 +71,8 @@ impl Context {
             gc: GarbageCollector::new(),
             atom_table: AtomTable::new(),
             global_object: JSValue::null(),
+            object_prototype: JSValue::null(),
+            function_prototype: JSValue::null(),
             exception_value: JSValue::undefined(),
             vm_ptr: None,
             reentrant_call: None,
@@ -76,6 +83,26 @@ impl Context {
         ctx.global_object = ctx.new_object().unwrap_or(JSValue::null());
 
         ctx
+    }
+
+    /// Set the Object.prototype for this context
+    pub fn set_object_prototype(&mut self, proto: JSValue) {
+        self.object_prototype = proto;
+    }
+
+    /// Get the Object.prototype for this context
+    pub fn get_object_prototype(&self) -> JSValue {
+        self.object_prototype
+    }
+
+    /// Set the Function.prototype for this context
+    pub fn set_function_prototype(&mut self, proto: JSValue) {
+        self.function_prototype = proto;
+    }
+
+    /// Get the Function.prototype for this context
+    pub fn get_function_prototype(&self) -> JSValue {
+        self.function_prototype
     }
 
     /// Set the reentrant call mechanism (called by VM during execution)
@@ -377,7 +404,13 @@ impl Context {
     ///
     /// Returns a JSValue wrapping a pointer to the object on the heap.
     pub fn new_object(&mut self) -> Result<JSValue, crate::memory::allocator::OutOfMemory> {
-        self.new_object_with_proto(JSValue::null())
+        // Use Object.prototype if set, otherwise null
+        let proto = if self.object_prototype.is_null() {
+            JSValue::null()
+        } else {
+            self.object_prototype
+        };
+        self.new_object_with_proto(proto)
     }
 
     /// Creates a new JavaScript object with a specific prototype
@@ -584,6 +617,18 @@ impl Context {
             if let Some(string_ctor) = self.get_global_property(string_atom) {
                 if let Some(string_proto) = self.get_property_internal(string_ctor, prototype_atom) {
                     return self.get_property_internal(string_proto, key);
+                }
+            }
+            return None;
+        }
+
+        // Handle functions - they inherit from Function.prototype
+        if self.get_native_function(obj_val).is_some() || self.get_bytecode_function(obj_val).is_some() {
+            // Look up in Function.prototype
+            let function_proto = self.function_prototype;
+            if !function_proto.is_null() {
+                if let Some(prop) = self.get_property_internal(function_proto, key) {
+                    return Some(prop);
                 }
             }
             return None;
@@ -798,7 +843,7 @@ impl Context {
         if self.is_closure(func) || self.get_bytecode_function(func).is_some() {
             // Use reentrant call mechanism if available
             if let (Some(vm_ptr), Some(call_fn)) = (self.vm_ptr, self.reentrant_call) {
-                return unsafe { call_fn(vm_ptr, self, func, args) };
+                return unsafe { call_fn(vm_ptr, self, func, this_val, args) };
             }
             // No VM available - can't call closures outside of execution
             return Err(self.new_string("Cannot call closure outside of VM execution")

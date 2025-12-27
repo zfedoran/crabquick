@@ -7,6 +7,7 @@
 use crate::context::Context;
 use crate::value::JSValue;
 use crate::builtins::{math, console, array, string, object};
+use alloc::string::ToString;
 
 // ========== Math Functions ==========
 
@@ -352,6 +353,35 @@ pub fn array_every_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) ->
     array::array_every(ctx, this, callback)
 }
 
+/// Array.prototype.lastIndexOf() wrapper
+pub fn array_last_index_of_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::conversion::to_int32;
+
+    let search = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let from_index = args.get(1).map(|v| to_int32(ctx, *v));
+
+    let result = array::array_last_index_of(ctx, this, search, from_index)?;
+    Ok(JSValue::from_int(result))
+}
+
+/// Array.prototype.reduceRight() wrapper
+pub fn array_reduce_right_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let callback = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let initial = args.get(1).copied();
+    array::array_reduce_right(ctx, this, callback, initial)
+}
+
+/// Array.prototype.sort() wrapper
+pub fn array_sort_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let compare_fn = args.get(0).copied().filter(|v| !v.is_undefined());
+    array::array_sort(ctx, this, compare_fn)
+}
+
+/// Array.prototype.toString() wrapper
+pub fn array_to_string_native(ctx: &mut Context, this: JSValue, _args: &[JSValue]) -> Result<JSValue, JSValue> {
+    array::array_to_string(ctx, this)
+}
+
 // ========== String.prototype Methods ==========
 
 /// String.prototype.charAt() wrapper
@@ -553,6 +583,55 @@ pub fn object_assign_native(ctx: &mut Context, _this: JSValue, args: &[JSValue])
     object::object_assign(ctx, target, sources)
 }
 
+/// Object.create() wrapper
+pub fn object_create_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let proto = args.get(0).copied().unwrap_or(JSValue::null());
+    object::object_create(ctx, proto)
+}
+
+/// Object.getPrototypeOf() wrapper
+pub fn object_get_prototype_of_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let obj = args.get(0).copied().unwrap_or(JSValue::undefined());
+    object::get_prototype_of(ctx, obj)
+}
+
+/// Object.setPrototypeOf() wrapper
+pub fn object_set_prototype_of_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let obj = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let proto = args.get(1).copied().unwrap_or(JSValue::null());
+    object::set_prototype_of(ctx, obj, proto)
+}
+
+/// Object.defineProperty() wrapper
+pub fn object_define_property_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let obj = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let prop = args.get(1).copied().unwrap_or(JSValue::undefined());
+    let descriptor = args.get(2).copied().unwrap_or(JSValue::undefined());
+    object::define_property(ctx, obj, prop, descriptor)
+}
+
+/// Object.prototype.hasOwnProperty() wrapper
+pub fn object_has_own_property_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let prop = args.get(0).copied().unwrap_or(JSValue::undefined());
+
+    let prop_atom = if let Some(s) = ctx.get_string(prop) {
+        string_to_atom(s)
+    } else if let Some(n) = prop.to_int() {
+        string_to_atom(&alloc::format!("{}", n))
+    } else {
+        return Ok(JSValue::bool(false));
+    };
+
+    Ok(JSValue::bool(object::has_own_property(ctx, this, prop_atom)))
+}
+
+/// Object.prototype.toString() wrapper
+pub fn object_to_string_native(ctx: &mut Context, this: JSValue, _args: &[JSValue]) -> Result<JSValue, JSValue> {
+    object::to_string(ctx, this)
+}
+
 // ========== Global Functions ==========
 
 /// parseInt() wrapper
@@ -636,17 +715,36 @@ pub fn function_call_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) 
 /// Function.prototype.apply() wrapper
 pub fn function_apply_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
     use alloc::vec::Vec;
+    use crate::runtime::init::string_to_atom;
 
     let this_arg = args.get(0).copied().unwrap_or(JSValue::undefined());
     let args_array = args.get(1).copied().unwrap_or(JSValue::undefined());
 
-    // Convert args array to a Vec to avoid borrowing issues
-    let call_args_vec: Vec<JSValue> = if let Some(arr_idx) = args_array.to_ptr() {
-        if let Some(arr) = ctx.get_value_array(arr_idx) {
-            unsafe { arr.as_slice().to_vec() }
-        } else {
-            Vec::new()
+    // Extract elements from the array object
+    let call_args_vec: Vec<JSValue> = if args_array.is_object() || args_array.to_ptr().is_some() {
+        // Get the length
+        let length_atom = string_to_atom("length");
+        let length = ctx.get_property(args_array, length_atom)
+            .and_then(|v| {
+                if let Some(i) = v.to_int() {
+                    Some(i as usize)
+                } else if let Some(n) = ctx.get_number(v) {
+                    Some(n as usize)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        // Extract each element by index
+        let mut result = Vec::with_capacity(length);
+        for i in 0..length {
+            let idx_atom = string_to_atom(&alloc::format!("{}", i));
+            let val = ctx.get_property(args_array, idx_atom)
+                .unwrap_or(JSValue::undefined());
+            result.push(val);
         }
+        result
     } else {
         Vec::new()
     };

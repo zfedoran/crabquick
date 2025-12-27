@@ -6,9 +6,11 @@
 
 use crate::context::Context;
 use crate::value::JSValue;
+use crate::object::PropertyFlags;
 use crate::memory::HeapIndex;
 use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::string::ToString;
 
 /// Array() constructor
 ///
@@ -676,6 +678,177 @@ pub fn array_every(ctx: &mut Context, arr: JSValue, callback: JSValue) -> Result
     }
 
     Ok(JSValue::bool(true))
+}
+
+/// Array.prototype.lastIndexOf() - Returns last index of element
+pub fn array_last_index_of(ctx: &Context, arr: JSValue, search_element: JSValue, from_index: Option<i32>) -> Result<i32, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let len = get_array_length(ctx, arr);
+    if len == 0 {
+        return Ok(-1);
+    }
+
+    let start = from_index.unwrap_or(len - 1).min(len - 1);
+    let start = if start < 0 { (len + start).max(0) } else { start };
+
+    for i in (0..=start).rev() {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            if values_equal(ctx, elem, search_element) {
+                return Ok(i);
+            }
+        }
+    }
+
+    Ok(-1)
+}
+
+/// Array.prototype.reduceRight() - Reduces array from right to left
+pub fn array_reduce_right(ctx: &mut Context, arr: JSValue, callback: JSValue, initial: Option<JSValue>) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let len = get_array_length(ctx, arr);
+
+    let mut accumulator = initial;
+    let mut started = initial.is_some();
+
+    for i in (0..len).rev() {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            if !started {
+                accumulator = Some(elem);
+                started = true;
+                continue;
+            }
+
+            // Call callback(accumulator, element, index, array)
+            let acc = accumulator.unwrap_or(JSValue::undefined());
+            let index_val = JSValue::from_int(i);
+            let args = [acc, elem, index_val, arr];
+            accumulator = Some(ctx.call_function(callback, JSValue::undefined(), &args)?);
+        }
+    }
+
+    Ok(accumulator.unwrap_or(JSValue::undefined()))
+}
+
+/// Array.prototype.sort() - Sorts array in place
+pub fn array_sort(ctx: &mut Context, arr: JSValue, compare_fn: Option<JSValue>) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+    use alloc::vec::Vec;
+
+    let len = get_array_length(ctx, arr);
+    if len <= 1 {
+        return Ok(arr);
+    }
+
+    // Collect elements
+    let mut elements: Vec<JSValue> = Vec::new();
+    for i in 0..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            elements.push(elem);
+        } else {
+            elements.push(JSValue::undefined());
+        }
+    }
+
+    // Sort using insertion sort (stable, simple)
+    for i in 1..elements.len() {
+        let key = elements[i];
+        let mut j = i;
+        while j > 0 {
+            let cmp = if let Some(compare) = compare_fn {
+                // Call compare function
+                let args = [elements[j - 1], key];
+                let result = ctx.call_function(compare, JSValue::undefined(), &args)?;
+                if let Some(n) = ctx.get_number(result) {
+                    n
+                } else if let Some(i) = result.to_int() {
+                    i as f64
+                } else {
+                    0.0
+                }
+            } else {
+                // Default: convert to strings and compare
+                let a_str = value_to_string(ctx, elements[j - 1]);
+                let b_str = value_to_string(ctx, key);
+                if a_str > b_str { 1.0 } else if a_str < b_str { -1.0 } else { 0.0 }
+            };
+
+            if cmp > 0.0 {
+                elements[j] = elements[j - 1];
+                j -= 1;
+            } else {
+                break;
+            }
+        }
+        elements[j] = key;
+    }
+
+    // Write back
+    for (i, elem) in elements.iter().enumerate() {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+        ctx.add_property(arr, idx_atom, *elem, PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    Ok(arr)
+}
+
+/// Array.prototype.toString() - Returns string representation
+pub fn array_to_string(ctx: &mut Context, arr: JSValue) -> Result<JSValue, JSValue> {
+    // Same as join with comma separator
+    array_join(ctx, arr, Some(","))
+}
+
+/// Helper to convert value to string for sorting
+fn value_to_string(ctx: &Context, val: JSValue) -> alloc::string::String {
+    if let Some(s) = ctx.get_string(val) {
+        s.to_string()
+    } else if let Some(n) = ctx.get_number(val) {
+        alloc::format!("{}", n)
+    } else if val.is_undefined() {
+        alloc::string::String::from("undefined")
+    } else if val.is_null() {
+        alloc::string::String::from("null")
+    } else if let Some(b) = val.to_bool() {
+        alloc::string::String::from(if b { "true" } else { "false" })
+    } else {
+        alloc::string::String::from("[object Object]")
+    }
+}
+
+/// Helper to compare values for equality
+fn values_equal(ctx: &Context, a: JSValue, b: JSValue) -> bool {
+    // Handle identical values (pointer equality)
+    if a == b {
+        return true;
+    }
+
+    // Compare numbers
+    if let (Some(na), Some(nb)) = (ctx.get_number(a), ctx.get_number(b)) {
+        return na == nb;
+    }
+
+    // Compare strings
+    if let (Some(sa), Some(sb)) = (ctx.get_string(a), ctx.get_string(b)) {
+        return sa == sb;
+    }
+
+    // Compare ints
+    if let (Some(ia), Some(ib)) = (a.to_int(), b.to_int()) {
+        return ia == ib;
+    }
+
+    false
 }
 
 #[cfg(test)]

@@ -229,23 +229,122 @@ pub fn to_string(ctx: &mut Context, obj: JSValue) -> Result<JSValue, JSValue> {
     ctx.new_string(str_val).map_err(|_| JSValue::exception())
 }
 
+/// Object.getPrototypeOf() - Returns the prototype of an object
+pub fn get_prototype_of(ctx: &Context, obj: JSValue) -> Result<JSValue, JSValue> {
+    if let Some(o) = ctx.get_object(obj) {
+        Ok(o.prototype())
+    } else {
+        Ok(JSValue::null())
+    }
+}
+
+/// Object.setPrototypeOf() - Sets the prototype of an object
+pub fn set_prototype_of(ctx: &mut Context, obj: JSValue, proto: JSValue) -> Result<JSValue, JSValue> {
+    if let Some(o) = ctx.get_object_mut(obj) {
+        o.set_prototype(proto);
+        Ok(obj)
+    } else {
+        Err(JSValue::exception())
+    }
+}
+
+/// Object.defineProperty() - Defines a property on an object
+pub fn define_property(
+    ctx: &mut Context,
+    obj: JSValue,
+    prop: JSValue,
+    descriptor: JSValue,
+) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+    use crate::object::PropertyFlags;
+
+    // Get property name as atom
+    let prop_atom = if let Some(s) = ctx.get_string(prop) {
+        string_to_atom(s)
+    } else if let Some(n) = prop.to_int() {
+        string_to_atom(&alloc::format!("{}", n))
+    } else {
+        return Err(JSValue::exception());
+    };
+
+    // Get value from descriptor
+    let value_atom = string_to_atom("value");
+    let value = ctx.get_property(descriptor, value_atom).unwrap_or(JSValue::undefined());
+
+    // Get flags from descriptor
+    let writable_atom = string_to_atom("writable");
+    let enumerable_atom = string_to_atom("enumerable");
+    let configurable_atom = string_to_atom("configurable");
+
+    let writable = ctx.get_property(descriptor, writable_atom)
+        .and_then(|v| v.to_bool())
+        .unwrap_or(false);
+    let enumerable = ctx.get_property(descriptor, enumerable_atom)
+        .and_then(|v| v.to_bool())
+        .unwrap_or(false);
+    let configurable = ctx.get_property(descriptor, configurable_atom)
+        .and_then(|v| v.to_bool())
+        .unwrap_or(false);
+
+    let mut flags = PropertyFlags::empty();
+    flags.set_writable(writable);
+    flags.set_enumerable(enumerable);
+    flags.set_configurable(configurable);
+
+    // Check for getter/setter
+    let get_atom = string_to_atom("get");
+    let set_atom = string_to_atom("set");
+
+    if let Some(_getter) = ctx.get_property(descriptor, get_atom) {
+        // TODO: Implement getter/setter properties
+        // For now, just set the value
+    }
+
+    if let Some(_setter) = ctx.get_property(descriptor, set_atom) {
+        // TODO: Implement getter/setter properties
+    }
+
+    ctx.add_property(obj, prop_atom, value, flags)
+        .map_err(|_| JSValue::exception())?;
+
+    Ok(obj)
+}
+
 /// Helper: Create an empty array
 fn create_empty_array(ctx: &mut Context) -> Result<JSValue, JSValue> {
-    let arr_idx = ctx.alloc_value_array(0).map_err(|_| JSValue::exception())?;
-    Ok(JSValue::from_ptr(arr_idx))
+    create_array_from_values(ctx, &[])
 }
 
 /// Helper: Create an array from values
 fn create_array_from_values(ctx: &mut Context, values: &[JSValue]) -> Result<JSValue, JSValue> {
-    let arr_idx = ctx.alloc_value_array(values.len()).map_err(|_| JSValue::exception())?;
+    use crate::runtime::init::string_to_atom;
 
-    if let Some(arr) = ctx.get_value_array_mut(arr_idx) {
-        for val in values {
-            unsafe { arr.push(*val); }
-        }
+    // Get Array.prototype for proper inheritance
+    let array_atom = string_to_atom("Array");
+    let proto_atom = string_to_atom("prototype");
+    let array_proto = ctx.get_global_property(array_atom)
+        .and_then(|arr_ctor| ctx.get_property(arr_ctor, proto_atom))
+        .unwrap_or(JSValue::null());
+
+    // Create a new array object with Array.prototype
+    let arr = ctx.new_object_with_proto(array_proto)
+        .map_err(|_| JSValue::exception())?;
+
+    // Set each element as a numbered property
+    for (i, val) in values.iter().enumerate() {
+        let idx_atom = string_to_atom(&alloc::format!("{}", i));
+        ctx.add_property(arr, idx_atom, *val, PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
     }
 
-    Ok(JSValue::from_ptr(arr_idx))
+    // Set length property
+    let length_atom = string_to_atom("length");
+    let length_val = ctx.new_number(values.len() as f64)
+        .map_err(|_| JSValue::exception())?;
+    ctx.add_property(arr, length_atom, length_val, PropertyFlags::default())
+        .map_err(|_| JSValue::exception())?;
+
+    Ok(arr)
 }
 
 #[cfg(test)]

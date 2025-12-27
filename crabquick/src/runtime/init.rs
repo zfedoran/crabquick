@@ -83,11 +83,23 @@ fn install_global_constants(ctx: &mut Context, global: JSValue) -> Result<(), JS
 fn install_object_constructor(ctx: &mut Context, global: JSValue) -> Result<(), JSValue> {
     use crate::builtins::native_functions;
 
-    // Create Object.prototype
-    let object_proto = ctx.new_object()
+    // Create Object.prototype (with null prototype - this is the root)
+    let object_proto = ctx.new_object_with_proto(JSValue::null())
         .map_err(|_| make_error(ctx, "Out of memory"))?;
 
-    // Create Object constructor (placeholder - would be a native function)
+    // Store Object.prototype in context so all future objects inherit from it
+    ctx.set_object_prototype(object_proto);
+
+    // Install Object.prototype methods
+    let has_own_prop_fn = ctx.new_native_function(native_functions::object_has_own_property_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, object_proto, "hasOwnProperty", has_own_prop_fn)?;
+
+    let to_string_fn = ctx.new_native_function(native_functions::object_to_string_native, 0)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, object_proto, "toString", to_string_fn)?;
+
+    // Create Object constructor (now inherits from Object.prototype)
     let object_ctor = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;
 
@@ -110,6 +122,22 @@ fn install_object_constructor(ctx: &mut Context, global: JSValue) -> Result<(), 
     let assign_fn = ctx.new_native_function(native_functions::object_assign_native, 2)
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, object_ctor, "assign", assign_fn)?;
+
+    let create_fn = ctx.new_native_function(native_functions::object_create_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, object_ctor, "create", create_fn)?;
+
+    let get_proto_fn = ctx.new_native_function(native_functions::object_get_prototype_of_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, object_ctor, "getPrototypeOf", get_proto_fn)?;
+
+    let set_proto_fn = ctx.new_native_function(native_functions::object_set_prototype_of_native, 2)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, object_ctor, "setPrototypeOf", set_proto_fn)?;
+
+    let define_prop_fn = ctx.new_native_function(native_functions::object_define_property_native, 3)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, object_ctor, "defineProperty", define_prop_fn)?;
 
     // Set Object on global
     set_property(ctx, global, "Object", object_ctor)?;
@@ -202,6 +230,22 @@ fn install_array_constructor(ctx: &mut Context, global: JSValue) -> Result<(), J
     let every_fn = ctx.new_native_function(native_functions::array_every_native, 1)
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, array_proto, "every", every_fn)?;
+
+    let last_index_of_fn = ctx.new_native_function(native_functions::array_last_index_of_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "lastIndexOf", last_index_of_fn)?;
+
+    let reduce_right_fn = ctx.new_native_function(native_functions::array_reduce_right_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "reduceRight", reduce_right_fn)?;
+
+    let sort_fn = ctx.new_native_function(native_functions::array_sort_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "sort", sort_fn)?;
+
+    let to_string_fn = ctx.new_native_function(native_functions::array_to_string_native, 0)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "toString", to_string_fn)?;
 
     // Create Array constructor (placeholder)
     let array_ctor = ctx.new_object()
@@ -376,6 +420,9 @@ fn install_function_constructor(ctx: &mut Context, global: JSValue) -> Result<()
     // Create Function.prototype
     let function_proto = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;
+
+    // Store Function.prototype in context so all functions inherit from it
+    ctx.set_function_prototype(function_proto);
 
     // Install Function.prototype methods
     let call_fn = ctx.new_native_function(native_functions::function_call_native, 1)
