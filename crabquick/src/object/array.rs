@@ -324,8 +324,8 @@ mod tests {
 
     #[test]
     fn test_array_size() {
-        // Verify array size is reasonable (16 bytes)
+        // Verify array size is reasonable (12 bytes: HeapIndex + u32 + u32)
         let size = core::mem::size_of::<JSArray>();
-        assert_eq!(size, 16);
+        assert_eq!(size, 12);
     }
 }
