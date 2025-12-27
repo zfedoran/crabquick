@@ -1603,8 +1603,62 @@ impl CodeGenerator {
                 Ok(())
             }
 
-            Expr::New { .. } | Expr::Arrow { .. } => {
-                // These are stubs for now
+            Expr::Arrow { params, body, loc } => {
+                // Convert arrow body to statement list
+                // For expression body: implicit return
+                // For block body: use statements directly
+                let body_stmts: Vec<Stmt> = match body {
+                    ArrowBody::Expr(expr) => {
+                        // Create implicit return statement
+                        alloc::vec![Stmt::Return {
+                            argument: Some(expr.as_ref().clone()),
+                            loc: *loc,
+                        }]
+                    }
+                    ArrowBody::Block(stmts) => stmts.clone(),
+                };
+
+                // Compile arrow function like a regular anonymous function
+                let (func_bytecode, local_count, captured_vars, _self_name_slot) =
+                    self.compile_function_body_with_name(None, params, &body_stmts)?;
+                let param_count = params.len() as u8;
+                let has_captures = !captured_vars.is_empty();
+
+                // Add to function table
+                let func_index = self.function_bytecodes.len() as u16;
+                self.function_bytecodes.push(FunctionBytecode {
+                    bytecode: func_bytecode,
+                    param_count,
+                    local_count,
+                    captured_vars: captured_vars.clone(),
+                    self_name_slot: None, // Arrow functions don't have a self-reference name
+                });
+
+                if has_captures {
+                    // Emit FClosure which creates a closure with captured variables
+                    self.emit(Instruction::with_u8(Opcode::FClosure, func_index as u8));
+                    self.writer.emit_u8(captured_vars.len() as u8);
+                    for cv in &captured_vars {
+                        let capture_byte = if cv.from_capture {
+                            cv.parent_index | 0x80
+                        } else {
+                            cv.parent_index
+                        };
+                        self.writer.emit_u8(capture_byte);
+                    }
+                } else {
+                    // No captures - emit regular PushFunc
+                    if func_index <= 255 {
+                        self.emit(Instruction::with_u8(Opcode::PushFunc8, func_index as u8));
+                    } else {
+                        self.emit(Instruction::with_u16(Opcode::PushFunc, func_index));
+                    }
+                }
+                Ok(())
+            }
+
+            Expr::New { .. } => {
+                // Stub for now
                 self.emit_simple(Opcode::Undefined);
                 Ok(())
             }

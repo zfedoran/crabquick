@@ -1189,7 +1189,58 @@ impl<'a> Parser<'a> {
                 Ok(Expr::Identifier(name, loc))
             }
             TokenKind::LParen => {
-                self.advance();
+                // Try to parse as arrow function: () => ... or (a, b) => ...
+                let checkpoint_pos = self.lexer.pc();
+                let checkpoint_current = self.current.clone();
+                let checkpoint_peeked = self.peeked.clone();
+
+                self.advance(); // consume (
+
+                // Try parsing as parameter list
+                let mut params = Vec::new();
+                let mut valid_arrow = true;
+
+                // Check for empty params: () =>
+                if !matches!(self.current.kind, TokenKind::RParen) {
+                    // Try to parse comma-separated identifiers
+                    loop {
+                        if let TokenKind::Identifier(name) = &self.current.kind {
+                            params.push(name.clone());
+                            self.advance();
+                        } else {
+                            valid_arrow = false;
+                            break;
+                        }
+
+                        if matches!(self.current.kind, TokenKind::RParen) {
+                            break;
+                        }
+
+                        if !self.consume_if(&TokenKind::Comma) {
+                            valid_arrow = false;
+                            break;
+                        }
+                    }
+                }
+
+                // Check for ) =>
+                if valid_arrow && self.consume_if(&TokenKind::RParen) {
+                    if self.consume_if(&TokenKind::Arrow) {
+                        let body = self.parse_arrow_body()?;
+                        return Ok(Expr::Arrow {
+                            params,
+                            body,
+                            loc,
+                        });
+                    }
+                }
+
+                // Not an arrow function, restore and parse as expression
+                self.lexer.set_pc(checkpoint_pos);
+                self.current = checkpoint_current;
+                self.peeked = checkpoint_peeked;
+
+                self.advance(); // consume ( again
                 let expr = self.parse_expression()?;
                 self.expect(TokenKind::RParen)?;
                 Ok(expr)

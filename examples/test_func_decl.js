@@ -1,4 +1,11 @@
-function add(a, b) {
-    return a + b;
+function outer() {
+  console.log("before inner def");
+  function inner() {
+    return 99;
+  }
+  console.log("after inner def");
+  console.log(typeof inner);
+  return inner;
 }
-console.log("Result: " + add(2, 3));
+console.log("calling outer");
+outer()
