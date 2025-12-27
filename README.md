@@ -22,14 +22,12 @@ The engine is ~80% complete:
 
 Missing for mquickjs parity:
 
-| Feature                                                                                         | Complexity |
-|-------------------------------------------------------------------------------------------------|------------|
-| JSON.parse/stringify                                                                            | Hard       |
-| RegExp                                                                                          | Hard       |
-| Typed Arrays                                                                                    | Hard       |
-| Error types (TypeError, ReferenceError, etc.)                                                   | Easy       |
-| Date.now()                                                                                      | Easy       |
-| Exponentiation                                                                                  | Easy       |
+- JSON.parse/stringify
+- RegExp 
+- Typed Arrays
+- Error types (TypeError, ReferenceError, etc.)
+- Date.now() 
+- Exponentiation
 
 -----------------------------
 
