@@ -1106,6 +1106,14 @@ impl VM {
                     // Create a new array
                     let arr = ctx.new_object()
                         .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                    // Initialize length to 0
+                    let length_atom = crate::runtime::init::string_to_atom("length");
+                    let zero = ctx.new_number(0.0)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                    ctx.add_property(arr, length_atom, zero, crate::object::PropertyFlags::default())
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
                     self.value_stack.push(arr)
                         .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
                     Ok(None)
