@@ -619,12 +619,18 @@ impl VM {
             // ===== Closure Operations =====
             FClosure => {
                 // FClosure creates a closure object with captured variables
-                // The operand is the function index
-                if let Operand::U8(func_idx) = instruction.operand {
+                // The operand is the function index (Const8 format)
+                if let Operand::Const8(func_idx) = instruction.operand {
                     // Get function from function table
                     if (func_idx as usize) >= self.function_table.len() {
                         return Err(self.throw_error(ctx, "Function index out of bounds"));
                     }
+
+                    // Get the function entry to extract bytecode_index, param_count, local_count
+                    let func_entry = &self.function_table[func_idx as usize];
+                    let bytecode_index = func_entry.bytecode_index;
+                    let param_count = func_entry.param_count;
+                    let local_count = func_entry.local_count;
 
                     // Get the captured var count from the next byte
                     // The compiler will emit: FClosure func_idx, captured_count, [var_ref indices...]
@@ -680,8 +686,8 @@ impl VM {
                         }
                     }
 
-                    // Allocate the closure object
-                    let closure_idx = match ctx.alloc_closure(func_idx as u16, &var_refs) {
+                    // Allocate the closure object with bytecode_index (not func table index!)
+                    let closure_idx = match ctx.alloc_closure(bytecode_index, param_count, local_count, &var_refs) {
                         Ok(idx) => idx,
                         Err(_) => return Err(self.throw_error(ctx, "Out of memory creating closure")),
                     };
@@ -1452,20 +1458,11 @@ impl VM {
                             None => return Err(self.throw_error(ctx, "Invalid closure value")),
                         };
 
-                        // Get closure info
-                        let (func_index, _var_ref_count) = match ctx.get_closure(closure_idx) {
-                            Some(closure) => (closure.func_index, closure.var_ref_count),
+                        // Get closure info - now uses bytecode_index directly!
+                        let (bytecode_index, param_count, local_count) = match ctx.get_closure(closure_idx) {
+                            Some(closure) => (closure.bytecode_index, closure.param_count as usize, closure.local_count as usize),
                             None => return Err(self.throw_error(ctx, "Invalid closure")),
                         };
-
-                        // Get the bytecode function from function table
-                        if (func_index as usize) >= self.function_table.len() {
-                            return Err(self.throw_error(ctx, "Closure function index out of bounds"));
-                        }
-                        let func_entry = &self.function_table[func_index as usize];
-                        let bytecode_index = func_entry.bytecode_index;
-                        let param_count = func_entry.param_count as usize;
-                        let local_count = func_entry.local_count as usize;
 
                         // Pad args if needed (undefined for missing params)
                         while args.len() < param_count {
@@ -1485,8 +1482,19 @@ impl VM {
                                 .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
                         }
 
+                        // Push a call frame to track base_sp for nested closures
+                        let frame = StackFrame::new_closure(func, base_sp, args.len() as u16, JSValue::undefined(), closure_idx);
+                        self.call_stack.push(frame)
+                            .map_err(|_| self.throw_error(ctx, "Call stack overflow"))?;
+
                         // Execute the function with closure context
-                        let result = self.execute_bytecode_function(ctx, bytecode_index, base_sp, local_count, Some(closure_idx))?;
+                        let result = self.execute_bytecode_function(ctx, bytecode_index, base_sp, local_count, Some(closure_idx));
+
+                        // Pop the call frame
+                        let _ = self.call_stack.pop();
+
+                        // Handle any error from execution
+                        let result = result?;
 
                         // Clean up local variables from stack
                         self.value_stack.truncate(base_sp);
@@ -1520,8 +1528,19 @@ impl VM {
                                 .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
                         }
 
+                        // Push a call frame to track base_sp for closures
+                        let frame = StackFrame::new(func, base_sp, argc, JSValue::undefined());
+                        self.call_stack.push(frame)
+                            .map_err(|_| self.throw_error(ctx, "Call stack overflow"))?;
+
                         // Execute the function (no closure context)
-                        let result = self.execute_bytecode_function(ctx, func_bc_index, base_sp, local_count, None)?;
+                        let result = self.execute_bytecode_function(ctx, func_bc_index, base_sp, local_count, None);
+
+                        // Pop the call frame
+                        let _ = self.call_stack.pop();
+
+                        // Handle any error from execution
+                        let result = result?;
 
                         // Clean up local variables from stack
                         self.value_stack.truncate(base_sp);
@@ -2166,56 +2185,68 @@ impl VM {
         // Function bytecode has the same format as main bytecode:
         // [const_count: u16][constants...][atom_count: u16][atoms...][func_count: u16][funcs...][code]
 
-        // We need to skip these headers to get to the actual code
-        // For now, read them into temporary storage (simplified)
+        // Save the current tables so we can restore them after
+        let old_constants = core::mem::take(&mut self.constants);
+        let old_const_is_f64 = core::mem::take(&mut self.const_is_f64);
+        let old_atom_table = core::mem::take(&mut self.atom_table);
+        let old_function_table = core::mem::take(&mut self.function_table);
 
-        // Read but don't use the constant pool (function has its own)
-        // TODO: Properly parse and save these for nested functions
-
-        // Skip constant pool
-        // Read count
+        // Parse constant pool (same format as main bytecode: type byte + raw JSValue)
+        // Type: 0 = f64 bits, 1 = JSValue
         let const_count = {
             let byte0 = reader.read_u8().unwrap_or(0);
             let byte1 = reader.read_u8().unwrap_or(0);
             u16::from_le_bytes([byte0, byte1]) as usize
         };
 
-        // Skip constants (type byte + usize each)
+        self.constants = alloc::vec::Vec::with_capacity(const_count);
+        self.const_is_f64 = alloc::vec::Vec::with_capacity(const_count);
         for _ in 0..const_count {
-            reader.read_u8(); // type
-            for _ in 0..core::mem::size_of::<usize>() {
-                reader.read_u8();
+            let const_type = reader.read_u8().unwrap_or(0);
+            let mut value_bytes = [0u8; core::mem::size_of::<usize>()];
+            for i in 0..core::mem::size_of::<usize>() {
+                value_bytes[i] = reader.read_u8().unwrap_or(0);
             }
+            let raw = usize::from_le_bytes(value_bytes);
+            let value = unsafe { core::mem::transmute::<usize, JSValue>(raw) };
+            self.constants.push(value);
+            self.const_is_f64.push(const_type == 0);
         }
 
-        // Skip atom table
+        // Parse atom table
         let atom_count = {
             let byte0 = reader.read_u8().unwrap_or(0);
             let byte1 = reader.read_u8().unwrap_or(0);
             u16::from_le_bytes([byte0, byte1]) as usize
         };
 
+        self.atom_table = alloc::vec::Vec::with_capacity(atom_count);
         for _ in 0..atom_count {
             let len = {
                 let byte0 = reader.read_u8().unwrap_or(0);
                 let byte1 = reader.read_u8().unwrap_or(0);
                 u16::from_le_bytes([byte0, byte1]) as usize
             };
+            let mut name_bytes = alloc::vec::Vec::with_capacity(len);
             for _ in 0..len {
-                reader.read_u8();
+                name_bytes.push(reader.read_u8().unwrap_or(0));
             }
+            let name = alloc::string::String::from_utf8(name_bytes)
+                .unwrap_or_else(|_| alloc::string::String::new());
+            self.atom_table.push(name);
         }
 
-        // Skip function table
+        // Parse function table
         let func_count = {
             let byte0 = reader.read_u8().unwrap_or(0);
             let byte1 = reader.read_u8().unwrap_or(0);
             u16::from_le_bytes([byte0, byte1]) as usize
         };
 
+        self.function_table = alloc::vec::Vec::with_capacity(func_count);
         for _ in 0..func_count {
-            reader.read_u8(); // param_count
-            reader.read_u8(); // local_count
+            let param_count = reader.read_u8().unwrap_or(0);
+            let local_count = reader.read_u8().unwrap_or(0);
             let bytecode_len = {
                 let mut bytes = [0u8; 4];
                 for i in 0..4 {
@@ -2223,12 +2254,67 @@ impl VM {
                 }
                 u32::from_le_bytes(bytes) as usize
             };
-            for _ in 0..bytecode_len {
-                reader.read_u8();
+
+            // Allocate the bytecode on the heap
+            let bytecode_index = match ctx.alloc_byte_array(bytecode_len) {
+                Ok(idx) => idx,
+                Err(_) => {
+                    // Restore tables and return error
+                    self.constants = old_constants;
+                    self.const_is_f64 = old_const_is_f64;
+                    self.atom_table = old_atom_table;
+                    self.function_table = old_function_table;
+                    return Err(self.throw_error(ctx, "Out of memory loading function bytecode"));
+                }
+            };
+
+            // Read the bytecode directly into the allocated array
+            if let Some(array) = ctx.get_byte_array_mut(bytecode_index) {
+                // SAFETY: We just allocated the array with bytecode_len capacity
+                let slice = unsafe { array.as_full_mut_slice() };
+                for i in 0..bytecode_len {
+                    if i < slice.len() {
+                        slice[i] = reader.read_u8().unwrap_or(0);
+                    } else {
+                        reader.read_u8(); // Skip if array is too small (shouldn't happen)
+                    }
+                }
+                // Set the count so as_slice() works correctly
+                array.header_mut().set_count(bytecode_len);
+            } else {
+                // Skip the bytecode bytes
+                for _ in 0..bytecode_len {
+                    reader.read_u8();
+                }
             }
+
+            self.function_table.push(FunctionEntry {
+                bytecode_index,
+                param_count,
+                local_count,
+            });
         }
 
-        // Now execute the actual code
+        // Execute the actual code
+        let result = self.execute_function_code(ctx, reader, base_sp, closure);
+
+        // Restore the old tables
+        self.constants = old_constants;
+        self.const_is_f64 = old_const_is_f64;
+        self.atom_table = old_atom_table;
+        self.function_table = old_function_table;
+
+        result
+    }
+
+    /// Inner execution loop for function bytecode
+    fn execute_function_code(
+        &mut self,
+        ctx: &mut Context,
+        reader: &mut BytecodeReader,
+        base_sp: usize,
+        closure: Option<HeapIndex>,
+    ) -> VMResult {
         loop {
             let instruction = match reader.decode() {
                 Some(inst) => inst,

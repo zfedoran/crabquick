@@ -895,7 +895,9 @@ impl Context {
     ///
     /// # Arguments
     ///
-    /// * `func_index` - Index into the function table
+    /// * `bytecode_index` - HeapIndex pointing to the function's bytecode
+    /// * `param_count` - Number of parameters
+    /// * `local_count` - Number of local variables
     /// * `var_refs` - Array of HeapIndex values pointing to JSVarRef objects
     ///
     /// # Returns
@@ -903,7 +905,9 @@ impl Context {
     /// The HeapIndex of the allocated closure
     pub fn alloc_closure(
         &mut self,
-        func_index: u16,
+        bytecode_index: HeapIndex,
+        param_count: u8,
+        local_count: u8,
         var_refs: &[HeapIndex],
     ) -> Result<HeapIndex, crate::memory::allocator::OutOfMemory> {
         use crate::object::function::JSClosure;
@@ -915,7 +919,9 @@ impl Context {
 
         unsafe {
             let closure: &mut JSClosure = self.arena.get_mut(index);
-            closure.func_index = func_index;
+            closure.bytecode_index = bytecode_index;
+            closure.param_count = param_count;
+            closure.local_count = local_count;
             closure.var_ref_count = var_refs.len() as u8;
             closure.reserved = 0;
 

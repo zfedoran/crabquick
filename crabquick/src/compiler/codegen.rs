@@ -1223,7 +1223,41 @@ impl CodeGenerator {
                 Ok(())
             }
 
-            Expr::New { .. } | Expr::Function { .. } | Expr::Arrow { .. } => {
+            Expr::Function { name: _name, params, body, .. } => {
+                // Compile function expression - similar to FunctionDecl but push result to stack
+                let (func_bytecode, local_count, captured_vars) = self.compile_function_body(params, body)?;
+                let param_count = params.len() as u8;
+                let has_captures = !captured_vars.is_empty();
+
+                // Add to function table
+                let func_index = self.function_bytecodes.len() as u16;
+                self.function_bytecodes.push(FunctionBytecode {
+                    bytecode: func_bytecode,
+                    param_count,
+                    local_count,
+                    captured_vars: captured_vars.clone(),
+                });
+
+                if has_captures {
+                    // Emit FClosure which creates a closure with captured variables
+                    self.emit(Instruction::with_u8(Opcode::FClosure, func_index as u8));
+                    self.writer.emit_u8(captured_vars.len() as u8);
+                    for cv in &captured_vars {
+                        self.writer.emit_u8(cv.parent_index);
+                    }
+                } else {
+                    // No captures - emit regular PushFunc
+                    if func_index <= 255 {
+                        self.emit(Instruction::with_u8(Opcode::PushFunc8, func_index as u8));
+                    } else {
+                        self.emit(Instruction::with_u16(Opcode::PushFunc, func_index));
+                    }
+                }
+                // Function value is now on the stack
+                Ok(())
+            }
+
+            Expr::New { .. } | Expr::Arrow { .. } => {
                 // These are stubs for now
                 self.emit_simple(Opcode::Undefined);
                 Ok(())

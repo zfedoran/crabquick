@@ -123,8 +123,12 @@ impl Default for JSVarRef {
 /// to JSVarRef objects for each captured variable.
 #[repr(C)]
 pub struct JSClosure {
-    /// Index to the bytecode function in the function table
-    pub func_index: u16,
+    /// HeapIndex pointing to the function's bytecode (not a function table index!)
+    pub bytecode_index: crate::memory::HeapIndex,
+    /// Number of parameters
+    pub param_count: u8,
+    /// Number of local variables (including parameters)
+    pub local_count: u8,
     /// Number of captured variables
     pub var_ref_count: u8,
     /// Reserved for alignment
@@ -175,7 +179,9 @@ impl JSClosure {
 impl Default for JSClosure {
     fn default() -> Self {
         JSClosure {
-            func_index: 0,
+            bytecode_index: crate::memory::HeapIndex(0),
+            param_count: 0,
+            local_count: 0,
             var_ref_count: 0,
             reserved: 0,
         }
