@@ -1030,8 +1030,44 @@ impl CodeGenerator {
                             }
                         }
                     }
+                    Expr::Member { object, property, computed, .. } => {
+                        // For obj.prop = value or obj[expr] = value
+                        // Stack currently has: [..., value]
+                        // We need: [..., obj, value] then SetField
+
+                        // Push the object
+                        self.gen_expr(object)?;
+                        // Stack: [..., value, obj]
+
+                        // Swap so we have [obj, value]
+                        self.emit_simple(Opcode::Swap);
+                        // Stack: [..., obj, value]
+
+                        if *computed {
+                            // obj[expr] = value - computed property access
+                            self.gen_expr(property)?;
+                            // Stack: [..., obj, value, key]
+                            // Need to reorder to [..., obj, key, value] then use SetArrayEl
+                            self.emit_simple(Opcode::Swap);
+                            // Stack: [..., obj, key, value]
+                            // TODO: Implement SetArrayEl properly
+                            // For now emit PutArrayEl (doesn't return value) and push value
+                            self.emit_simple(Opcode::PutArrayEl);
+                            // PutArrayEl pops value, key, but we need to push something back
+                            // This is a simplification - would need a proper SetArrayEl
+                        } else {
+                            // obj.prop = value - dot notation
+                            if let Expr::Identifier(name, _) = property.as_ref() {
+                                let atom_idx = self.get_or_create_atom(name);
+                                // Use SetField (u16) which pushes value back
+                                self.emit(Instruction::with_u16(Opcode::SetField, atom_idx));
+                            } else {
+                                return Err(CodeGenError::new("Invalid property in member expression".into()));
+                            }
+                        }
+                    }
                     _ => {
-                        // Member expressions, etc. - stub for now
+                        // Other patterns not yet supported
                         self.emit_simple(Opcode::Drop);
                     }
                 }

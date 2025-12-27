@@ -275,6 +275,27 @@ pub fn array_splice_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -
     array::array_splice(ctx, this, start, delete_count, items)
 }
 
+/// Array.prototype.join() wrapper
+pub fn array_join_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    // Get separator from first argument, default to ","
+    let sep = if let Some(sep_val) = args.get(0) {
+        if let Some(s) = ctx.get_string(*sep_val) {
+            Some(s.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    array::array_join(ctx, this, sep.as_deref())
+}
+
+/// Array.prototype.reverse() wrapper
+pub fn array_reverse_native(ctx: &mut Context, this: JSValue, _args: &[JSValue]) -> Result<JSValue, JSValue> {
+    array::array_reverse(ctx, this)
+}
+
 // ========== String.prototype Methods ==========
 
 /// String.prototype.charAt() wrapper

@@ -1310,8 +1310,15 @@ impl VM {
 
             Array => {
                 if let Operand::U8(_count) = instruction.operand {
-                    // Create a new array
-                    let arr = ctx.new_object()
+                    // Get Array.prototype for proper inheritance
+                    let array_atom = crate::runtime::init::string_to_atom("Array");
+                    let proto_atom = crate::runtime::init::string_to_atom("prototype");
+                    let array_proto = ctx.get_global_property(array_atom)
+                        .and_then(|arr_ctor| ctx.get_property(arr_ctor, proto_atom))
+                        .unwrap_or(JSValue::null());
+
+                    // Create a new array with Array.prototype
+                    let arr = ctx.new_object_with_proto(array_proto)
                         .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
 
                     // Initialize length to 0
@@ -1758,6 +1765,31 @@ impl VM {
                 }
             }
 
+            SetField => {
+                if let Operand::U16(atom_idx) = instruction.operand {
+                    // Pop value, then object from stack
+                    let value = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    let obj = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    // Get property atom
+                    let atom = self.get_atom_from_table(atom_idx as usize)?;
+
+                    // Set property on object
+                    ctx.add_property(obj, atom, value, crate::object::PropertyFlags::default())
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                    // Push value back (SetField returns the assigned value)
+                    self.value_stack.push(value)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for SetField"))
+                }
+            }
+
             // ===== Local Variable Access =====
             GetLoc => {
                 if let Operand::U8(idx) = instruction.operand {
@@ -1829,22 +1861,8 @@ impl VM {
             }
 
             // ===== Object/Array Creation =====
-            Array => {
-                // Create new array object
-                let arr = ctx.new_object()
-                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
-
-                // Initialize length to 0
-                let length_atom = crate::runtime::init::string_to_atom("length");
-                let zero = ctx.new_number(0.0)
-                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
-                ctx.add_property(arr, length_atom, zero, crate::object::PropertyFlags::default())
-                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
-
-                self.value_stack.push(arr)
-                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
-                Ok(None)
-            }
+            // Note: Array opcode already handled above, this is dead code
+            // Keeping for completeness but should be cleaned up
 
             // ===== Array/Object Element Access =====
             GetArrayEl => {

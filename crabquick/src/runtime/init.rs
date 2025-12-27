@@ -162,6 +162,14 @@ fn install_array_constructor(ctx: &mut Context, global: JSValue) -> Result<(), J
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, array_proto, "includes", includes_fn)?;
 
+    let join_fn = ctx.new_native_function(native_functions::array_join_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "join", join_fn)?;
+
+    let reverse_fn = ctx.new_native_function(native_functions::array_reverse_native, 0)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "reverse", reverse_fn)?;
+
     // Create Array constructor (placeholder)
     let array_ctor = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;

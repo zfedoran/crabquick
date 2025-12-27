@@ -38,70 +38,161 @@ pub fn is_array(ctx: &Context, value: JSValue) -> bool {
     }
 }
 
+/// Helper to get array length from object
+fn get_array_length(ctx: &Context, arr: JSValue) -> i32 {
+    use crate::runtime::init::string_to_atom;
+    let length_atom = string_to_atom("length");
+    ctx.get_property(arr, length_atom)
+        .and_then(|v| v.to_int())
+        .unwrap_or(0)
+}
+
+/// Helper to set array length on object
+fn set_array_length(ctx: &mut Context, arr: JSValue, len: i32) -> Result<(), JSValue> {
+    use crate::runtime::init::string_to_atom;
+    use crate::object::PropertyFlags;
+    let length_atom = string_to_atom("length");
+    let len_val = ctx.new_number(len as f64).map_err(|_| JSValue::exception())?;
+    ctx.add_property(arr, length_atom, len_val, PropertyFlags::default())
+        .map_err(|_| JSValue::exception())
+}
+
 /// Array.prototype.push() - Adds elements to the end of an array
 ///
-/// Returns the new length
+/// Returns the new length (works with object-based arrays)
 pub fn array_push(ctx: &mut Context, arr: JSValue, elements: &[JSValue]) -> Result<i32, JSValue> {
-    let idx = arr.to_ptr().ok_or(JSValue::exception())?;
-    let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
+    use crate::runtime::init::string_to_atom;
+    use crate::object::PropertyFlags;
+
+    let mut len = get_array_length(ctx, arr);
 
     for elem in elements {
-        if !unsafe { arr_ref.push(*elem) } {
-            // Array is full
-            return Err(JSValue::exception());
-        }
+        // Create atom for the index
+        let idx_str = alloc::format!("{}", len);
+        let idx_atom = string_to_atom(&idx_str);
+
+        // Set the element at arr[len]
+        ctx.add_property(arr, idx_atom, *elem, PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+
+        len += 1;
     }
 
-    Ok(arr_ref.header().count() as i32)
+    // Update length
+    set_array_length(ctx, arr, len)?;
+
+    Ok(len)
 }
 
 /// Array.prototype.pop() - Removes and returns the last element
 pub fn array_pop(ctx: &mut Context, arr: JSValue) -> Result<JSValue, JSValue> {
-    let idx = arr.to_ptr().ok_or(JSValue::exception())?;
-    let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
+    use crate::runtime::init::string_to_atom;
 
-    Ok(unsafe { arr_ref.pop() }.unwrap_or(JSValue::undefined()))
+    let len = get_array_length(ctx, arr);
+
+    if len <= 0 {
+        return Ok(JSValue::undefined());
+    }
+
+    let new_len = len - 1;
+
+    // Get the last element
+    let idx_str = alloc::format!("{}", new_len);
+    let idx_atom = string_to_atom(&idx_str);
+    let value = ctx.get_property(arr, idx_atom).unwrap_or(JSValue::undefined());
+
+    // Update length (we could also delete the property, but for simplicity just update length)
+    set_array_length(ctx, arr, new_len)?;
+
+    Ok(value)
 }
 
 /// Array.prototype.shift() - Removes and returns the first element
 pub fn array_shift(ctx: &mut Context, arr: JSValue) -> Result<JSValue, JSValue> {
-    let idx = arr.to_ptr().ok_or(JSValue::exception())?;
-    let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
+    use crate::runtime::init::string_to_atom;
+    use crate::object::PropertyFlags;
 
-    Ok(unsafe { arr_ref.shift() }.unwrap_or(JSValue::undefined()))
+    let len = get_array_length(ctx, arr);
+
+    if len <= 0 {
+        return Ok(JSValue::undefined());
+    }
+
+    // Get first element
+    let zero_atom = string_to_atom("0");
+    let first = ctx.get_property(arr, zero_atom).unwrap_or(JSValue::undefined());
+
+    // Shift all elements down
+    for i in 1..len {
+        let src_str = alloc::format!("{}", i);
+        let src_atom = string_to_atom(&src_str);
+        let dst_str = alloc::format!("{}", i - 1);
+        let dst_atom = string_to_atom(&dst_str);
+
+        let val = ctx.get_property(arr, src_atom).unwrap_or(JSValue::undefined());
+        ctx.add_property(arr, dst_atom, val, PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    // Update length
+    set_array_length(ctx, arr, len - 1)?;
+
+    Ok(first)
 }
 
 /// Array.prototype.unshift() - Adds elements to the beginning of an array
 ///
 /// Returns the new length
 pub fn array_unshift(ctx: &mut Context, arr: JSValue, elements: &[JSValue]) -> Result<i32, JSValue> {
-    let idx = arr.to_ptr().ok_or(JSValue::exception())?;
-    let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
+    use crate::runtime::init::string_to_atom;
+    use crate::object::PropertyFlags;
 
-    // Insert elements in reverse order to maintain their order
-    for elem in elements.iter().rev() {
-        if !unsafe { arr_ref.unshift(*elem) } {
-            return Err(JSValue::exception());
-        }
+    let len = get_array_length(ctx, arr);
+    let add_count = elements.len() as i32;
+
+    // Shift existing elements up
+    for i in (0..len).rev() {
+        let src_str = alloc::format!("{}", i);
+        let src_atom = string_to_atom(&src_str);
+        let dst_str = alloc::format!("{}", i + add_count);
+        let dst_atom = string_to_atom(&dst_str);
+
+        let val = ctx.get_property(arr, src_atom).unwrap_or(JSValue::undefined());
+        ctx.add_property(arr, dst_atom, val, PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
     }
 
-    Ok(arr_ref.header().count() as i32)
+    // Insert new elements at the beginning
+    for (i, elem) in elements.iter().enumerate() {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+        ctx.add_property(arr, idx_atom, *elem, PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+    }
+
+    // Update length
+    let new_len = len + add_count;
+    set_array_length(ctx, arr, new_len)?;
+
+    Ok(new_len)
 }
 
 /// Array.prototype.indexOf() - Returns the first index of an element
 ///
-/// Returns -1 if not found
+/// Returns -1 if not found (works with object-based arrays)
 pub fn array_index_of(ctx: &Context, arr: JSValue, search_element: JSValue, from_index: Option<i32>) -> Result<i32, JSValue> {
-    let idx = arr.to_ptr().ok_or(JSValue::exception())?;
-    let arr_ref = ctx.get_value_array(idx).ok_or(JSValue::exception())?;
+    use crate::runtime::init::string_to_atom;
 
-    let count = arr_ref.header().count() as i32;
+    let len = get_array_length(ctx, arr);
     let start = from_index.unwrap_or(0).max(0);
 
-    let slice = unsafe { arr_ref.as_slice() };
-    for i in start..count {
-        if i < slice.len() as i32 && slice[i as usize] == search_element {
-            return Ok(i);
+    for i in start..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            if elem == search_element {
+                return Ok(i);
+            }
         }
     }
 
@@ -114,24 +205,29 @@ pub fn array_includes(ctx: &Context, arr: JSValue, search_element: JSValue, from
     Ok(index >= 0)
 }
 
-/// Array.prototype.join() - Joins all elements into a string
+/// Array.prototype.join() - Joins all elements into a string (works with object-based arrays)
 pub fn array_join(ctx: &mut Context, arr: JSValue, separator: Option<&str>) -> Result<JSValue, JSValue> {
-    let idx = arr.to_ptr().ok_or(JSValue::exception())?;
-    let arr_ref = ctx.get_value_array(idx).ok_or(JSValue::exception())?;
+    use crate::runtime::init::string_to_atom;
 
+    let len = get_array_length(ctx, arr);
     let sep = separator.unwrap_or(",");
     let mut result = String::new();
 
-    let slice = unsafe { arr_ref.as_slice() };
-    for (i, elem) in slice.iter().enumerate() {
+    for i in 0..len {
         if i > 0 {
             result.push_str(sep);
         }
 
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+        let elem = ctx.get_property(arr, idx_atom).unwrap_or(JSValue::undefined());
+
         // Convert element to string
-        if let Some(s) = ctx.get_string(*elem) {
+        if let Some(s) = ctx.get_string(elem) {
             result.push_str(s);
-        } else if let Some(n) = ctx.get_number(*elem) {
+        } else if let Some(n) = elem.to_int() {
+            result.push_str(&alloc::format!("{}", n));
+        } else if let Some(n) = ctx.get_number(elem) {
             result.push_str(&alloc::format!("{}", n));
         } else if elem.is_null() {
             // null becomes empty string
@@ -267,14 +363,34 @@ pub fn array_splice(ctx: &mut Context, arr: JSValue, start: i32, delete_count: O
 
 /// Array.prototype.reverse() - Reverses an array in place
 pub fn array_reverse(ctx: &mut Context, arr: JSValue) -> Result<JSValue, JSValue> {
-    let idx = arr.to_ptr().ok_or(JSValue::exception())?;
-    let arr_ref = ctx.get_value_array_mut(idx).ok_or(JSValue::exception())?;
+    use crate::runtime::init::string_to_atom;
+    use crate::object::PropertyFlags;
 
-    let count = arr_ref.header().count() as usize;
-    unsafe {
-        let slice = arr_ref.as_full_mut_slice();
-        let slice = &mut slice[..count];
-        slice.reverse();
+    let len = get_array_length(ctx, arr);
+
+    // Swap elements from ends toward the middle
+    let mut left = 0;
+    let mut right = len - 1;
+
+    while left < right {
+        // Get left element
+        let left_str = alloc::format!("{}", left);
+        let left_atom = string_to_atom(&left_str);
+        let left_val = ctx.get_property(arr, left_atom).unwrap_or(JSValue::undefined());
+
+        // Get right element
+        let right_str = alloc::format!("{}", right);
+        let right_atom = string_to_atom(&right_str);
+        let right_val = ctx.get_property(arr, right_atom).unwrap_or(JSValue::undefined());
+
+        // Swap
+        ctx.add_property(arr, left_atom, right_val, PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+        ctx.add_property(arr, right_atom, left_val, PropertyFlags::default())
+            .map_err(|_| JSValue::exception())?;
+
+        left += 1;
+        right -= 1;
     }
 
     Ok(arr)
