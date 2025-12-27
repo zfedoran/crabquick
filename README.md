@@ -22,20 +22,14 @@ The engine is ~80% complete:
 
 Missing for mquickjs parity:
 
-| Priority | Feature                                                                                         | Complexity |
-|----------|-------------------------------------------------------------------------------------------------|------------|
-| 1        | String methods (charAt, indexOf, slice, split, substring, toLowerCase, trim, replace)           | Medium     |
-| 2        | More Array methods (shift, unshift, concat, slice, splice, indexOf, sort, reverse, reduceRight) | Medium     |
-| 3        | Object methods (Object.keys, Object.create, Object.getPrototypeOf, hasOwnProperty)              | Medium     |
-| 4        | for...of / for...in                                                                             | Medium     |
-| 5        | Function.call/apply/bind                                                                        | Medium     |
-| 6        | Number methods (parseInt, parseFloat, toFixed)                                                  | Easy       |
-| 7        | JSON.parse/stringify                                                                            | Hard       |
-| 8        | RegExp                                                                                          | Hard       |
-| 9        | Typed Arrays                                                                                    | Hard       |
-| 10       | Error types (TypeError, ReferenceError, etc.)                                                   | Easy       |
-| 11       | Date.now()                                                                                      | Easy       |
-| 12       | Exponentiation                                                                                  | Easy       |
+| Feature                                                                                         | Complexity |
+|-------------------------------------------------------------------------------------------------|------------|
+| JSON.parse/stringify                                                                            | Hard       |
+| RegExp                                                                                          | Hard       |
+| Typed Arrays                                                                                    | Hard       |
+| Error types (TypeError, ReferenceError, etc.)                                                   | Easy       |
+| Date.now()                                                                                      | Easy       |
+| Exponentiation                                                                                  | Easy       |
 
 -----------------------------
 
