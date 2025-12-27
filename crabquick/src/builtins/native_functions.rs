@@ -842,3 +842,29 @@ pub fn number_to_string_native(ctx: &mut Context, this: JSValue, args: &[JSValue
     let radix = args.get(0).map(|v| to_int32(ctx, *v));
     number::to_string(ctx, this, radix)
 }
+
+// ========== JSON Methods ==========
+
+/// JSON.parse() wrapper
+pub fn json_parse_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::builtins::json;
+    use alloc::string::ToString;
+
+    let json_str = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let s = match ctx.get_string(json_str) {
+        Some(s) => s.to_string(),
+        None => return Err(ctx.new_string("JSON.parse requires a string").unwrap_or(JSValue::exception())),
+    };
+
+    json::parse(ctx, &s)
+}
+
+/// JSON.stringify() wrapper
+pub fn json_stringify_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    use crate::builtins::json;
+
+    let value = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let result = json::stringify(ctx, value)?;
+
+    ctx.new_string(&result).map_err(|_| JSValue::exception())
+}

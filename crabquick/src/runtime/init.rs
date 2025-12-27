@@ -49,6 +49,9 @@ pub fn init_runtime(ctx: &mut Context) -> Result<JSValue, JSValue> {
     // Install Math object
     install_math_object(ctx, global)?;
 
+    // Install JSON object
+    install_json_object(ctx, global)?;
+
     // Install Error constructors
     install_error_constructors(ctx, global)?;
 
@@ -595,6 +598,30 @@ fn install_error_constructors(ctx: &mut Context, global: JSValue) -> Result<(), 
     let syntax_error_ctor = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, global, "SyntaxError", syntax_error_ctor)?;
+
+    Ok(())
+}
+
+/// Install JSON object
+fn install_json_object(ctx: &mut Context, global: JSValue) -> Result<(), JSValue> {
+    use crate::builtins::native_functions;
+
+    // Create JSON object
+    let json = ctx.new_object()
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+
+    // JSON.parse
+    let parse_fn = ctx.new_native_function(native_functions::json_parse_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, json, "parse", parse_fn)?;
+
+    // JSON.stringify
+    let stringify_fn = ctx.new_native_function(native_functions::json_stringify_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, json, "stringify", stringify_fn)?;
+
+    // Set JSON on global
+    set_property(ctx, global, "JSON", json)?;
 
     Ok(())
 }
