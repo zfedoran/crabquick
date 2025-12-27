@@ -1005,10 +1005,13 @@ impl CodeGenerator {
                 if s.is_empty() {
                     self.emit_simple(Opcode::PushEmptyString);
                 } else {
-                    // For strings, we'll emit PushEmptyString for now
-                    // Full string support requires runtime string table
-                    // TODO: Implement proper string constant handling
-                    self.emit_simple(Opcode::PushEmptyString);
+                    // Add string to atom table and emit PushAtomString instruction
+                    let atom_idx = self.get_or_create_atom(s);
+                    if atom_idx <= 255 {
+                        self.emit(Instruction::with_atom8(Opcode::PushAtomString8, atom_idx as u8));
+                    } else {
+                        self.emit(Instruction::with_atom16(Opcode::PushAtomString16, atom_idx));
+                    }
                 }
             }
 

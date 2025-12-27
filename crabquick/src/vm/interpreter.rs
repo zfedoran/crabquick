@@ -616,6 +616,42 @@ impl VM {
                 }
             }
 
+            PushAtomString8 => {
+                if let Operand::Atom8(atom_idx) = instruction.operand {
+                    // Get string from atom table
+                    if (atom_idx as usize) >= self.atom_table.len() {
+                        return Err(self.throw_error(ctx, "Atom index out of bounds"));
+                    }
+
+                    let string = &self.atom_table[atom_idx as usize];
+                    let val = ctx.new_string(string)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory creating string"))?;
+                    self.value_stack.push(val)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PushAtomString8"))
+                }
+            }
+
+            PushAtomString16 => {
+                if let Operand::Atom16(atom_idx) = instruction.operand {
+                    // Get string from atom table
+                    if (atom_idx as usize) >= self.atom_table.len() {
+                        return Err(self.throw_error(ctx, "Atom index out of bounds"));
+                    }
+
+                    let string = &self.atom_table[atom_idx as usize];
+                    let val = ctx.new_string(string)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory creating string"))?;
+                    self.value_stack.push(val)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PushAtomString16"))
+                }
+            }
+
             // ===== Arithmetic Operations =====
             Add => {
                 let b = self.value_stack.pop()
