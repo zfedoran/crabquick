@@ -296,6 +296,13 @@ pub fn array_reverse_native(ctx: &mut Context, this: JSValue, _args: &[JSValue])
     array::array_reverse(ctx, this)
 }
 
+/// Array.isArray() - static method on Array constructor
+pub fn array_is_array_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let value = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let result = array::is_array(ctx, value);
+    Ok(JSValue::bool(result))
+}
+
 // ========== String.prototype Methods ==========
 
 /// String.prototype.charAt() wrapper

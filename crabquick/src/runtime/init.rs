@@ -177,10 +177,13 @@ fn install_array_constructor(ctx: &mut Context, global: JSValue) -> Result<(), J
     // Set Array.prototype
     set_property(ctx, array_ctor, "prototype", array_proto)?;
 
+    // Install Array.isArray as static method on constructor
+    let is_array_fn = ctx.new_native_function(native_functions::array_is_array_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_ctor, "isArray", is_array_fn)?;
+
     // Set Array on global
     set_property(ctx, global, "Array", array_ctor)?;
-
-    // TODO: Install Array.isArray
 
     Ok(())
 }

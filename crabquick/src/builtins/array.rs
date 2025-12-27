@@ -29,13 +29,35 @@ pub fn array_constructor(ctx: &mut Context, elements: &[JSValue]) -> Result<JSVa
 }
 
 /// Array.isArray() - Determines whether a value is an array
+///
+/// For object-based arrays, checks if the object has Array.prototype in its chain
 pub fn is_array(ctx: &Context, value: JSValue) -> bool {
-    if let Some(idx) = value.to_ptr() {
-        // Check if it's a value array
-        ctx.get_value_array(idx).is_some()
-    } else {
-        false
+    use crate::runtime::init::string_to_atom;
+
+    if !value.is_ptr() {
+        return false;
     }
+
+    // Get Array.prototype to compare
+    let array_atom = string_to_atom("Array");
+    let proto_atom = string_to_atom("prototype");
+
+    let array_proto = ctx.get_global_property(array_atom)
+        .and_then(|arr_ctor| ctx.get_property(arr_ctor, proto_atom));
+
+    if let Some(expected_proto) = array_proto {
+        // Check if value's prototype matches Array.prototype
+        if let Some(obj) = ctx.get_object(value) {
+            return obj.prototype() == expected_proto;
+        }
+    }
+
+    // Fallback: check for value array (internal representation)
+    if let Some(idx) = value.to_ptr() {
+        return ctx.get_value_array(idx).is_some();
+    }
+
+    false
 }
 
 /// Helper to get array length from object
