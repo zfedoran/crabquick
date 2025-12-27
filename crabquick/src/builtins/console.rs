@@ -77,18 +77,16 @@ fn value_to_display_string(ctx: &Context, value: JSValue) -> String {
 pub fn console_log(ctx: &Context, args: &[JSValue]) {
     let message = format_values(ctx, args);
 
-    #[cfg(not(test))]
-    {
-        // In no_std environment, we can't use println! directly
-        // This is a placeholder - actual implementation would need
-        // to use a platform-specific output method
-        // For now, we'll just do nothing in no_std mode
-        let _ = message;
-    }
-
-    #[cfg(test)]
+    #[cfg(any(test, feature = "std"))]
     {
         println!("{}", message);
+    }
+
+    #[cfg(not(any(test, feature = "std")))]
+    {
+        // In no_std environment without std feature, we can't use println!
+        // This is a placeholder for platform-specific output
+        let _ = message;
     }
 }
 
@@ -101,14 +99,14 @@ pub fn console_log(ctx: &Context, args: &[JSValue]) {
 pub fn console_error(ctx: &Context, args: &[JSValue]) {
     let message = format_values(ctx, args);
 
-    #[cfg(not(test))]
-    {
-        let _ = message;
-    }
-
-    #[cfg(test)]
+    #[cfg(any(test, feature = "std"))]
     {
         eprintln!("{}", message);
+    }
+
+    #[cfg(not(any(test, feature = "std")))]
+    {
+        let _ = message;
     }
 }
 
@@ -121,14 +119,14 @@ pub fn console_error(ctx: &Context, args: &[JSValue]) {
 pub fn console_warn(ctx: &Context, args: &[JSValue]) {
     let message = format_values(ctx, args);
 
-    #[cfg(not(test))]
-    {
-        let _ = message;
-    }
-
-    #[cfg(test)]
+    #[cfg(any(test, feature = "std"))]
     {
         eprintln!("Warning: {}", message);
+    }
+
+    #[cfg(not(any(test, feature = "std")))]
+    {
+        let _ = message;
     }
 }
 

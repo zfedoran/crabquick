@@ -13,7 +13,7 @@ name = "crabquick"
 path = "src/main.rs"
 
 [dependencies]
-crabquick = { path = "../crabquick" }
+crabquick = { path = "../crabquick", features = ["std"] }
 rustyline = { version = "13.0", optional = true }
 
 [features]

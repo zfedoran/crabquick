@@ -10,6 +10,10 @@ description = "A minimal JavaScript engine in Rust - core library"
 keywords = ["javascript", "js", "engine", "embedded", "minimal"]
 categories = ["embedded", "parser-implementations", "no-std"]
 
+[features]
+default = []
+std = []
+
 [lints]
 workspace = true
 
