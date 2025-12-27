@@ -50,6 +50,8 @@ struct VarBinding {
 struct Scope {
     bindings: Vec<VarBinding>,
     parent: Option<Box<Scope>>,
+    /// Base index for this scope (cumulative from parent scopes)
+    base_index: u8,
 }
 
 impl Scope {
@@ -57,18 +59,27 @@ impl Scope {
         Scope {
             bindings: Vec::new(),
             parent: None,
+            base_index: 0,
         }
     }
 
     fn with_parent(parent: Scope) -> Self {
+        // Child scope starts after parent's variables
+        let base_index = parent.next_index();
         Scope {
             bindings: Vec::new(),
             parent: Some(Box::new(parent)),
+            base_index,
         }
     }
 
+    /// Get the next available index (base + current bindings count)
+    fn next_index(&self) -> u8 {
+        self.base_index + self.bindings.len() as u8
+    }
+
     fn add_binding(&mut self, name: String, kind: VarKind) -> u8 {
-        let index = self.bindings.len() as u8;
+        let index = self.next_index();
         self.bindings.push(VarBinding { name, index, kind });
         index
     }
@@ -720,17 +731,87 @@ impl CodeGenerator {
             }
 
             Expr::Update { op, arg, prefix, .. } => {
-                // For simplicity, we'll just increment/decrement
-                self.gen_expr(arg)?;
+                // Increment/decrement operators need to:
+                // 1. Get the current value
+                // 2. Compute the new value (old +/- 1)
+                // 3. Store the new value back
+                // 4. Leave either old (postfix) or new (prefix) on stack
 
-                let opcode = match (op, prefix) {
-                    (UpdateOp::Inc, true) => Opcode::Inc,
-                    (UpdateOp::Dec, true) => Opcode::Dec,
-                    (UpdateOp::Inc, false) => Opcode::PostInc,
-                    (UpdateOp::Dec, false) => Opcode::PostDec,
+                let add_opcode = match op {
+                    UpdateOp::Inc => Opcode::Add,
+                    UpdateOp::Dec => Opcode::Sub,
                 };
 
-                self.emit_simple(opcode);
+                match arg.as_ref() {
+                    Expr::Identifier(name, _) => {
+                        if let Some((index, _)) = self.scope.find_binding(name) {
+                            // Local variable
+                            if *prefix {
+                                // ++i or --i: get, add/sub 1, store (leave new value)
+                                self.emit(Instruction::with_u8(Opcode::GetLoc, index));
+                                self.emit_simple(Opcode::Push1);
+                                self.emit_simple(add_opcode);
+                                self.emit(Instruction::with_u8(Opcode::SetLoc, index));
+                            } else {
+                                // i++ or i--: get, dup, add/sub 1, store (leave old value)
+                                self.emit(Instruction::with_u8(Opcode::GetLoc, index));
+                                self.emit_simple(Opcode::Dup);
+                                self.emit_simple(Opcode::Push1);
+                                self.emit_simple(add_opcode);
+                                self.emit(Instruction::with_u8(Opcode::PutLoc, index));
+                            }
+                        } else {
+                            // Global variable
+                            let atom_id = self.get_or_create_atom(name);
+                            let get_op = if atom_id <= 255 { Opcode::GetGlobal8 } else { Opcode::GetGlobal16 };
+
+                            if *prefix {
+                                // ++x or --x (global): get, add/sub 1, store (leave new value)
+                                if atom_id <= 255 {
+                                    self.emit(Instruction::with_u8(get_op, atom_id as u8));
+                                } else {
+                                    self.emit(Instruction::with_u16(get_op, atom_id as u16));
+                                }
+                                self.emit_simple(Opcode::Push1);
+                                self.emit_simple(add_opcode);
+                                // SetGlobal leaves value on stack
+                                if atom_id <= 255 {
+                                    self.emit(Instruction::with_u8(Opcode::SetGlobal8, atom_id as u8));
+                                } else {
+                                    self.emit(Instruction::with_u16(Opcode::SetGlobal16, atom_id as u16));
+                                }
+                            } else {
+                                // x++ or x-- (global): get, dup, add/sub 1, store (leave old value)
+                                if atom_id <= 255 {
+                                    self.emit(Instruction::with_u8(get_op, atom_id as u8));
+                                } else {
+                                    self.emit(Instruction::with_u16(get_op, atom_id as u16));
+                                }
+                                self.emit_simple(Opcode::Dup);
+                                self.emit_simple(Opcode::Push1);
+                                self.emit_simple(add_opcode);
+                                // PutGlobal pops the value
+                                if atom_id <= 255 {
+                                    self.emit(Instruction::with_u8(Opcode::PutGlobal8, atom_id as u8));
+                                } else {
+                                    self.emit(Instruction::with_u16(Opcode::PutGlobal16, atom_id as u16));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        // Property access and other lvalues not yet supported
+                        // Fall back to the simple (broken) behavior for now
+                        self.gen_expr(arg)?;
+                        let opcode = match (op, prefix) {
+                            (UpdateOp::Inc, true) => Opcode::Inc,
+                            (UpdateOp::Dec, true) => Opcode::Dec,
+                            (UpdateOp::Inc, false) => Opcode::PostInc,
+                            (UpdateOp::Dec, false) => Opcode::PostDec,
+                        };
+                        self.emit_simple(opcode);
+                    }
+                }
                 Ok(())
             }
 
