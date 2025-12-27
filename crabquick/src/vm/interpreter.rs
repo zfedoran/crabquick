@@ -620,68 +620,78 @@ impl VM {
             FClosure => {
                 // FClosure creates a closure object with captured variables
                 // The operand is the function index
-                // Before this opcode, the compiler should have pushed the var refs onto the stack
                 if let Operand::U8(func_idx) = instruction.operand {
                     // Get function from function table
                     if (func_idx as usize) >= self.function_table.len() {
                         return Err(self.throw_error(ctx, "Function index out of bounds"));
                     }
 
-                    // Get the captured var count from the function entry
-                    // For now, we'll get the count from the next byte
+                    // Get the captured var count from the next byte
                     // The compiler will emit: FClosure func_idx, captured_count, [var_ref indices...]
                     let captured_count = reader.read_u8().unwrap_or(0) as usize;
 
-                    // Collect var ref heap indices from the current call frame's closure
-                    // and/or create new var refs for locals that need to be captured
+                    // Collect var ref heap indices
                     let mut var_refs = alloc::vec::Vec::with_capacity(captured_count);
 
                     for _ in 0..captured_count {
                         // Read the capture source info (local index to capture)
                         let local_idx = reader.read_u8().unwrap_or(0) as usize;
 
-                        // Get the current call frame
-                        let frame = self.call_stack.current()
-                            .map_err(|_| self.throw_error(ctx, "No call frame"))?;
-                        let base_sp = frame.sp;
+                        // Get the current call frame info (avoiding borrow issues)
+                        let (base_sp, parent_closure_opt) = match self.call_stack.current() {
+                            Ok(frame) => (frame.sp, frame.closure),
+                            Err(_) => return Err(self.throw_error(ctx, "No call frame")),
+                        };
 
                         // Check if we're in a closure context with existing var refs
-                        if let Some(parent_closure_idx) = frame.closure {
-                            // We're in a closure - the "local" might actually be a var ref
-                            // For simplicity, if local_idx is within the var_ref_count, use it
-                            let parent_closure = ctx.get_closure(parent_closure_idx)
-                                .ok_or_else(|| self.throw_error(ctx, "Invalid parent closure"))?;
+                        if let Some(parent_closure_idx) = parent_closure_opt {
+                            // Get parent closure info
+                            let reused_var_ref = match ctx.get_closure(parent_closure_idx) {
+                                Some(parent_closure) => {
+                                    if local_idx < parent_closure.var_ref_count as usize {
+                                        Some(parent_closure.get_var_ref(local_idx))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                None => return Err(self.throw_error(ctx, "Invalid parent closure")),
+                            };
 
-                            if local_idx < parent_closure.var_ref_count as usize {
-                                // It's a captured variable from parent - reuse the var ref
-                                var_refs.push(parent_closure.get_var_ref(local_idx));
+                            if let Some(existing_ref) = reused_var_ref {
+                                // Reuse the var ref from parent
+                                var_refs.push(existing_ref);
                             } else {
                                 // It's a local variable - create new var ref
                                 let local_val = self.value_stack.get(base_sp + local_idx)
                                     .unwrap_or(JSValue::undefined());
-                                let var_ref_idx = ctx.alloc_var_ref(local_val)
-                                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
-                                var_refs.push(var_ref_idx);
+                                match ctx.alloc_var_ref(local_val) {
+                                    Ok(var_ref_idx) => var_refs.push(var_ref_idx),
+                                    Err(_) => return Err(self.throw_error(ctx, "Out of memory")),
+                                }
                             }
                         } else {
                             // Not in a closure - capture from local stack
                             let local_val = self.value_stack.get(base_sp + local_idx)
                                 .unwrap_or(JSValue::undefined());
-                            let var_ref_idx = ctx.alloc_var_ref(local_val)
-                                .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
-                            var_refs.push(var_ref_idx);
+                            match ctx.alloc_var_ref(local_val) {
+                                Ok(var_ref_idx) => var_refs.push(var_ref_idx),
+                                Err(_) => return Err(self.throw_error(ctx, "Out of memory")),
+                            }
                         }
                     }
 
                     // Allocate the closure object
-                    let closure_idx = ctx.alloc_closure(func_idx as u16, &var_refs)
-                        .map_err(|_| self.throw_error(ctx, "Out of memory creating closure"))?;
+                    let closure_idx = match ctx.alloc_closure(func_idx as u16, &var_refs) {
+                        Ok(idx) => idx,
+                        Err(_) => return Err(self.throw_error(ctx, "Out of memory creating closure")),
+                    };
 
                     // Push closure as a JSValue
                     let closure_val = JSValue::from_ptr(closure_idx);
-                    self.value_stack.push(closure_val)
-                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
-                    Ok(None)
+                    match self.value_stack.push(closure_val) {
+                        Ok(()) => Ok(None),
+                        Err(_) => Err(self.throw_error(ctx, "Stack overflow")),
+                    }
                 } else {
                     Err(self.throw_error(ctx, "Invalid operand for FClosure"))
                 }
@@ -691,26 +701,35 @@ impl VM {
                 // Get a captured variable from the current closure's environment
                 if let Operand::U8(var_idx) = instruction.operand {
                     // Get the closure from the current call frame
-                    let frame = self.call_stack.current()
-                        .map_err(|_| self.throw_error(ctx, "No call frame"))?;
+                    let closure_idx = match self.call_stack.current() {
+                        Ok(frame) => match frame.closure {
+                            Some(idx) => idx,
+                            None => return Err(self.throw_error(ctx, "GetVarRef outside closure")),
+                        },
+                        Err(_) => return Err(self.throw_error(ctx, "No call frame")),
+                    };
 
-                    let closure_idx = frame.closure
-                        .ok_or_else(|| self.throw_error(ctx, "GetVarRef outside closure"))?;
+                    // Get var ref index from closure
+                    let var_ref_idx = match ctx.get_closure(closure_idx) {
+                        Some(closure) => {
+                            if var_idx >= closure.var_ref_count {
+                                return Err(self.throw_error(ctx, "Var ref index out of bounds"));
+                            }
+                            closure.get_var_ref(var_idx as usize)
+                        }
+                        None => return Err(self.throw_error(ctx, "Invalid closure")),
+                    };
 
-                    let closure = ctx.get_closure(closure_idx)
-                        .ok_or_else(|| self.throw_error(ctx, "Invalid closure"))?;
+                    // Get the value from var ref
+                    let value = match ctx.get_var_ref(var_ref_idx) {
+                        Some(var_ref) => var_ref.value(),
+                        None => return Err(self.throw_error(ctx, "Invalid var ref")),
+                    };
 
-                    if var_idx >= closure.var_ref_count {
-                        return Err(self.throw_error(ctx, "Var ref index out of bounds"));
+                    match self.value_stack.push(value) {
+                        Ok(()) => Ok(None),
+                        Err(_) => Err(self.throw_error(ctx, "Stack overflow")),
                     }
-
-                    let var_ref_idx = closure.get_var_ref(var_idx as usize);
-                    let var_ref = ctx.get_var_ref(var_ref_idx)
-                        .ok_or_else(|| self.throw_error(ctx, "Invalid var ref"))?;
-
-                    self.value_stack.push(var_ref.value())
-                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
-                    Ok(None)
                 } else {
                     Err(self.throw_error(ctx, "Invalid operand for GetVarRef"))
                 }
@@ -719,29 +738,39 @@ impl VM {
             PutVarRef => {
                 // Set a captured variable (pops value from stack)
                 if let Operand::U8(var_idx) = instruction.operand {
-                    let value = self.value_stack.pop()
-                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    let value = match self.value_stack.pop() {
+                        Ok(v) => v,
+                        Err(_) => return Err(self.throw_error(ctx, "Stack underflow")),
+                    };
 
                     // Get the closure from the current call frame
-                    let frame = self.call_stack.current()
-                        .map_err(|_| self.throw_error(ctx, "No call frame"))?;
+                    let closure_idx = match self.call_stack.current() {
+                        Ok(frame) => match frame.closure {
+                            Some(idx) => idx,
+                            None => return Err(self.throw_error(ctx, "PutVarRef outside closure")),
+                        },
+                        Err(_) => return Err(self.throw_error(ctx, "No call frame")),
+                    };
 
-                    let closure_idx = frame.closure
-                        .ok_or_else(|| self.throw_error(ctx, "PutVarRef outside closure"))?;
+                    // Get var ref index from closure
+                    let var_ref_idx = match ctx.get_closure(closure_idx) {
+                        Some(closure) => {
+                            if var_idx >= closure.var_ref_count {
+                                return Err(self.throw_error(ctx, "Var ref index out of bounds"));
+                            }
+                            closure.get_var_ref(var_idx as usize)
+                        }
+                        None => return Err(self.throw_error(ctx, "Invalid closure")),
+                    };
 
-                    let closure = ctx.get_closure(closure_idx)
-                        .ok_or_else(|| self.throw_error(ctx, "Invalid closure"))?;
-
-                    if var_idx >= closure.var_ref_count {
-                        return Err(self.throw_error(ctx, "Var ref index out of bounds"));
+                    // Set the value in var ref
+                    match ctx.get_var_ref_mut(var_ref_idx) {
+                        Some(var_ref) => {
+                            var_ref.set_value(value);
+                            Ok(None)
+                        }
+                        None => Err(self.throw_error(ctx, "Invalid var ref")),
                     }
-
-                    let var_ref_idx = closure.get_var_ref(var_idx as usize);
-                    let var_ref = ctx.get_var_ref_mut(var_ref_idx)
-                        .ok_or_else(|| self.throw_error(ctx, "Invalid var ref"))?;
-
-                    var_ref.set_value(value);
-                    Ok(None)
                 } else {
                     Err(self.throw_error(ctx, "Invalid operand for PutVarRef"))
                 }
@@ -750,29 +779,39 @@ impl VM {
             SetVarRef => {
                 // Set a captured variable (leaves value on stack)
                 if let Operand::U8(var_idx) = instruction.operand {
-                    let value = self.value_stack.peek()
-                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                    let value = match self.value_stack.peek() {
+                        Ok(v) => v,
+                        Err(_) => return Err(self.throw_error(ctx, "Stack underflow")),
+                    };
 
                     // Get the closure from the current call frame
-                    let frame = self.call_stack.current()
-                        .map_err(|_| self.throw_error(ctx, "No call frame"))?;
+                    let closure_idx = match self.call_stack.current() {
+                        Ok(frame) => match frame.closure {
+                            Some(idx) => idx,
+                            None => return Err(self.throw_error(ctx, "SetVarRef outside closure")),
+                        },
+                        Err(_) => return Err(self.throw_error(ctx, "No call frame")),
+                    };
 
-                    let closure_idx = frame.closure
-                        .ok_or_else(|| self.throw_error(ctx, "SetVarRef outside closure"))?;
+                    // Get var ref index from closure
+                    let var_ref_idx = match ctx.get_closure(closure_idx) {
+                        Some(closure) => {
+                            if var_idx >= closure.var_ref_count {
+                                return Err(self.throw_error(ctx, "Var ref index out of bounds"));
+                            }
+                            closure.get_var_ref(var_idx as usize)
+                        }
+                        None => return Err(self.throw_error(ctx, "Invalid closure")),
+                    };
 
-                    let closure = ctx.get_closure(closure_idx)
-                        .ok_or_else(|| self.throw_error(ctx, "Invalid closure"))?;
-
-                    if var_idx >= closure.var_ref_count {
-                        return Err(self.throw_error(ctx, "Var ref index out of bounds"));
+                    // Set the value in var ref
+                    match ctx.get_var_ref_mut(var_ref_idx) {
+                        Some(var_ref) => {
+                            var_ref.set_value(value);
+                            Ok(None)
+                        }
+                        None => Err(self.throw_error(ctx, "Invalid var ref")),
                     }
-
-                    let var_ref_idx = closure.get_var_ref(var_idx as usize);
-                    let var_ref = ctx.get_var_ref_mut(var_ref_idx)
-                        .ok_or_else(|| self.throw_error(ctx, "Invalid var ref"))?;
-
-                    var_ref.set_value(value);
-                    Ok(None)
                 } else {
                     Err(self.throw_error(ctx, "Invalid operand for SetVarRef"))
                 }
@@ -1405,13 +1444,59 @@ impl VM {
                     let func = self.value_stack.pop()
                         .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
 
-                    // Check if it's a bytecode function
-                    if let Some(bc_func) = ctx.get_bytecode_function(func) {
-                        // This is a bytecode function - execute it within the VM
-                        // For now, we'll execute it immediately and push the result
-                        // TODO: This is a simplified implementation - ideally we'd save
-                        // the current reader state and switch to executing the function's bytecode
+                    // Check if it's a closure
+                    if ctx.is_closure(func) {
+                        // This is a closure - extract the function and closure environment
+                        let closure_idx = match func.to_ptr() {
+                            Some(idx) => idx,
+                            None => return Err(self.throw_error(ctx, "Invalid closure value")),
+                        };
 
+                        // Get closure info
+                        let (func_index, _var_ref_count) = match ctx.get_closure(closure_idx) {
+                            Some(closure) => (closure.func_index, closure.var_ref_count),
+                            None => return Err(self.throw_error(ctx, "Invalid closure")),
+                        };
+
+                        // Get the bytecode function from function table
+                        if (func_index as usize) >= self.function_table.len() {
+                            return Err(self.throw_error(ctx, "Closure function index out of bounds"));
+                        }
+                        let func_entry = &self.function_table[func_index as usize];
+                        let bytecode_index = func_entry.bytecode_index;
+                        let param_count = func_entry.param_count as usize;
+                        let local_count = func_entry.local_count as usize;
+
+                        // Pad args if needed (undefined for missing params)
+                        while args.len() < param_count {
+                            args.push(JSValue::undefined());
+                        }
+
+                        // Push arguments onto the stack as locals
+                        let base_sp = self.value_stack.len();
+                        for arg in &args {
+                            self.value_stack.push(*arg)
+                                .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        // Reserve space for additional locals
+                        for _ in param_count..local_count {
+                            self.value_stack.push(JSValue::undefined())
+                                .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        // Execute the function with closure context
+                        let result = self.execute_bytecode_function(ctx, bytecode_index, base_sp, local_count, Some(closure_idx))?;
+
+                        // Clean up local variables from stack
+                        self.value_stack.truncate(base_sp);
+
+                        // Push result
+                        self.value_stack.push(result)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        Ok(None)
+                    } else if let Some(bc_func) = ctx.get_bytecode_function(func) {
+                        // This is a bytecode function - execute it within the VM
                         // Get the function's bytecode
                         let func_bc_index = bc_func.bytecode_index();
                         let param_count = bc_func.param_count() as usize;
@@ -1435,9 +1520,8 @@ impl VM {
                                 .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
                         }
 
-                        // Create a new bytecode reader for the function
-                        // Execute the function in a simplified way for now
-                        let result = self.execute_bytecode_function(ctx, func_bc_index, base_sp, local_count)?;
+                        // Execute the function (no closure context)
+                        let result = self.execute_bytecode_function(ctx, func_bc_index, base_sp, local_count, None)?;
 
                         // Clean up local variables from stack
                         self.value_stack.truncate(base_sp);
@@ -2036,6 +2120,7 @@ impl VM {
         bytecode_index: HeapIndex,
         base_sp: usize,
         local_count: usize,
+        closure: Option<HeapIndex>,
     ) -> VMResult {
         // Get the bytecode array
         let bytecode_ptr: *const crate::value::JSByteArray = match ctx.get_byte_array(bytecode_index) {
@@ -2066,7 +2151,7 @@ impl VM {
         // So we just need to execute the bytecode and intercept GetLoc/SetLoc
 
         // For simplicity, let's parse the minimal headers and execute
-        self.execute_function_bytecode(ctx, &mut reader, base_sp)
+        self.execute_function_bytecode(ctx, &mut reader, base_sp, closure)
     }
 
     /// Executes function bytecode with proper local variable handling
@@ -2075,6 +2160,7 @@ impl VM {
         ctx: &mut Context,
         reader: &mut BytecodeReader,
         base_sp: usize,
+        closure: Option<HeapIndex>,
     ) -> VMResult {
         // Parse headers (constants, atoms, functions)
         // Function bytecode has the same format as main bytecode:
@@ -2149,7 +2235,7 @@ impl VM {
                 None => return Ok(JSValue::undefined()),
             };
 
-            // Handle local variable access specially
+            // Handle local variable access and closure variable access specially
             match instruction.opcode {
                 Opcode::GetLoc => {
                     if let Operand::U8(idx) = instruction.operand {
@@ -2173,6 +2259,87 @@ impl VM {
                             .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
                         self.value_stack.set(base_sp + idx as usize, val)
                             .map_err(|_| self.throw_error(ctx, "Invalid local variable index"))?;
+                    }
+                }
+                Opcode::GetVarRef => {
+                    // Get a captured variable from the closure's environment
+                    if let Operand::U8(var_idx) = instruction.operand {
+                        let closure_idx = match closure {
+                            Some(idx) => idx,
+                            None => return Err(self.throw_error(ctx, "GetVarRef outside closure")),
+                        };
+
+                        let var_ref_idx = match ctx.get_closure(closure_idx) {
+                            Some(c) => {
+                                if var_idx >= c.var_ref_count {
+                                    return Err(self.throw_error(ctx, "Var ref index out of bounds"));
+                                }
+                                c.get_var_ref(var_idx as usize)
+                            }
+                            None => return Err(self.throw_error(ctx, "Invalid closure")),
+                        };
+
+                        let value = match ctx.get_var_ref(var_ref_idx) {
+                            Some(var_ref) => var_ref.value(),
+                            None => return Err(self.throw_error(ctx, "Invalid var ref")),
+                        };
+
+                        self.value_stack.push(value)
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    }
+                }
+                Opcode::PutVarRef => {
+                    // Set a captured variable (pops value from stack)
+                    if let Operand::U8(var_idx) = instruction.operand {
+                        let value = self.value_stack.pop()
+                            .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                        let closure_idx = match closure {
+                            Some(idx) => idx,
+                            None => return Err(self.throw_error(ctx, "PutVarRef outside closure")),
+                        };
+
+                        let var_ref_idx = match ctx.get_closure(closure_idx) {
+                            Some(c) => {
+                                if var_idx >= c.var_ref_count {
+                                    return Err(self.throw_error(ctx, "Var ref index out of bounds"));
+                                }
+                                c.get_var_ref(var_idx as usize)
+                            }
+                            None => return Err(self.throw_error(ctx, "Invalid closure")),
+                        };
+
+                        match ctx.get_var_ref_mut(var_ref_idx) {
+                            Some(var_ref) => var_ref.set_value(value),
+                            None => return Err(self.throw_error(ctx, "Invalid var ref")),
+                        }
+                    }
+                }
+                Opcode::SetVarRef => {
+                    // Set a captured variable (leaves value on stack)
+                    if let Operand::U8(var_idx) = instruction.operand {
+                        let value = self.value_stack.peek()
+                            .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                        let closure_idx = match closure {
+                            Some(idx) => idx,
+                            None => return Err(self.throw_error(ctx, "SetVarRef outside closure")),
+                        };
+
+                        let var_ref_idx = match ctx.get_closure(closure_idx) {
+                            Some(c) => {
+                                if var_idx >= c.var_ref_count {
+                                    return Err(self.throw_error(ctx, "Var ref index out of bounds"));
+                                }
+                                c.get_var_ref(var_idx as usize)
+                            }
+                            None => return Err(self.throw_error(ctx, "Invalid closure")),
+                        };
+
+                        match ctx.get_var_ref_mut(var_ref_idx) {
+                            Some(var_ref) => var_ref.set_value(value),
+                            None => return Err(self.throw_error(ctx, "Invalid var ref")),
+                        }
                     }
                 }
                 Opcode::Return => {
