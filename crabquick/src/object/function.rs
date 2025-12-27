@@ -131,8 +131,9 @@ pub struct JSClosure {
     pub local_count: u8,
     /// Number of captured variables
     pub var_ref_count: u8,
-    /// Reserved for alignment
-    pub reserved: u8,
+    /// For named function expressions: slot index where the function should be stored
+    /// 0xFF means no self-reference needed
+    pub self_name_slot: u8,
     // Followed by: [HeapIndex; var_ref_count] - the var_refs array
 }
 
@@ -183,7 +184,7 @@ impl Default for JSClosure {
             param_count: 0,
             local_count: 0,
             var_ref_count: 0,
-            reserved: 0,
+            self_name_slot: 0xFF,  // 0xFF means no self-reference
         }
     }
 }

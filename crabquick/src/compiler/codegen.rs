@@ -153,6 +153,9 @@ struct FunctionBytecode {
     local_count: u8,
     /// Variables captured from outer scope (for closures)
     captured_vars: Vec<CapturedVar>,
+    /// For named function expressions: the local slot where the function self-reference should be stored
+    /// The VM will set this slot to the function value when called
+    self_name_slot: Option<u8>,
 }
 
 /// Code generator
@@ -323,6 +326,8 @@ impl CodeGenerator {
         for func in &self.function_bytecodes {
             result.push(func.param_count);
             result.push(func.local_count);
+            // Write self_name_slot: 0xFF means None, otherwise it's the slot index
+            result.push(func.self_name_slot.unwrap_or(0xFF));
             let bytecode_len = func.bytecode.len() as u32;
             result.extend_from_slice(&bytecode_len.to_le_bytes());
             result.extend_from_slice(&func.bytecode);
@@ -339,7 +344,17 @@ impl CodeGenerator {
     /// Creates a new code generator with a fresh scope containing parameters,
     /// compiles the function body, and returns the complete bytecode plus local count
     /// and captured variables.
-    fn compile_function_body(&mut self, params: &[String], body: &[Stmt]) -> CodeGenResult<(Vec<u8>, u8, Vec<CapturedVar>)> {
+    ///
+    /// If `func_name` is provided (for named function expressions), it's added as a
+    /// local binding so the function can refer to itself for recursion.
+    /// Returns (bytecode, local_count, captured_vars, self_name_slot)
+    fn compile_function_body(&mut self, params: &[String], body: &[Stmt]) -> CodeGenResult<(Vec<u8>, u8, Vec<CapturedVar>, Option<u8>)> {
+        self.compile_function_body_with_name(None, params, body)
+    }
+
+    /// Compiles a function body with an optional name binding for recursion
+    /// Returns (bytecode, local_count, captured_vars, self_name_slot)
+    fn compile_function_body_with_name(&mut self, func_name: Option<&str>, params: &[String], body: &[Stmt]) -> CodeGenResult<(Vec<u8>, u8, Vec<CapturedVar>, Option<u8>)> {
         // First, pre-analyze the body to find all referenced variables
         // This ensures we capture any variables needed by nested functions
         let referenced_vars = self.collect_referenced_vars(body);
@@ -379,10 +394,20 @@ impl CodeGenerator {
         // Create a new code generator for the function with access to outer vars
         let mut func_gen = CodeGenerator::new_for_closure(outer_vars);
 
-        // Create a new scope and add parameters as local variables
+        // Create a new scope and add parameters as local variables FIRST
+        // This ensures params match the VM's stack layout (args pushed first)
         for param in params {
             func_gen.scope.add_binding(param.clone(), VarKind::Var);
         }
+
+        // If this is a named function expression, add the name as a local AFTER params
+        // The function will be able to reference itself for recursion
+        let self_name_slot = if let Some(name) = func_name {
+            let slot = func_gen.scope.add_binding(name.to_string(), VarKind::Var);
+            Some(slot)
+        } else {
+            None
+        };
 
         // Compile all statements in the function body
         let last_idx = body.len().saturating_sub(1);
@@ -413,7 +438,7 @@ impl CodeGenerator {
         let captured_vars = func_gen.captured_vars.clone();
 
         // Generate the complete bytecode (includes constant pool and atom table)
-        Ok((func_gen.generate_raw()?, local_count, captured_vars))
+        Ok((func_gen.generate_raw()?, local_count, captured_vars, self_name_slot))
     }
 
     /// Collects all variable bindings from a scope hierarchy
@@ -652,6 +677,8 @@ impl CodeGenerator {
         for func in &self.function_bytecodes {
             result.push(func.param_count);
             result.push(func.local_count);
+            // Write self_name_slot: 0xFF means None, otherwise it's the slot index
+            result.push(func.self_name_slot.unwrap_or(0xFF));
             let bytecode_len = func.bytecode.len() as u32;
             result.extend_from_slice(&bytecode_len.to_le_bytes());
             result.extend_from_slice(&func.bytecode);
@@ -771,7 +798,8 @@ impl CodeGenerator {
 
             Stmt::FunctionDecl { name, params, body, .. } => {
                 // Compile function body to bytecode
-                let (func_bytecode, local_count, captured_vars) = self.compile_function_body(params, body)?;
+                // Function declarations don't need self_name_slot as the name is bound in outer scope
+                let (func_bytecode, local_count, captured_vars, _self_name_slot) = self.compile_function_body(params, body)?;
                 let param_count = params.len() as u8;
                 let has_captures = !captured_vars.is_empty();
 
@@ -782,6 +810,7 @@ impl CodeGenerator {
                     param_count,
                     local_count,
                     captured_vars: captured_vars.clone(),
+                    self_name_slot: None,  // Function declarations don't need self-reference
                 });
 
                 if has_captures {
@@ -1528,11 +1557,13 @@ impl CodeGenerator {
                 Ok(())
             }
 
-            Expr::Function { name: _name, params, body, .. } => {
+            Expr::Function { name, params, body, .. } => {
                 // Compile function expression - similar to FunctionDecl but push result to stack
-                let (func_bytecode, local_count, captured_vars) = self.compile_function_body(params, body)?;
+                // For named function expressions, the name is visible inside the function for recursion
+                let (func_bytecode, local_count, captured_vars, self_name_slot) =
+                    self.compile_function_body_with_name(name.as_deref(), params, body)?;
                 let param_count = params.len() as u8;
-                let has_captures = !captured_vars.is_empty();
+                let has_captures = !captured_vars.is_empty() || self_name_slot.is_some();
 
                 // Add to function table
                 let func_index = self.function_bytecodes.len() as u16;
@@ -1541,6 +1572,7 @@ impl CodeGenerator {
                     param_count,
                     local_count,
                     captured_vars: captured_vars.clone(),
+                    self_name_slot,
                 });
 
                 if has_captures {

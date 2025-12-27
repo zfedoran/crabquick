@@ -910,6 +910,18 @@ impl Context {
         local_count: u8,
         var_refs: &[HeapIndex],
     ) -> Result<HeapIndex, crate::memory::allocator::OutOfMemory> {
+        self.alloc_closure_with_self_name(bytecode_index, param_count, local_count, var_refs, 0xFF)
+    }
+
+    /// Allocates a closure with optional self-name slot for named function expressions
+    pub fn alloc_closure_with_self_name(
+        &mut self,
+        bytecode_index: HeapIndex,
+        param_count: u8,
+        local_count: u8,
+        var_refs: &[HeapIndex],
+        self_name_slot: u8,
+    ) -> Result<HeapIndex, crate::memory::allocator::OutOfMemory> {
         use crate::object::function::JSClosure;
 
         let total_size = core::mem::size_of::<crate::memory::MemBlockHeader>()
@@ -923,7 +935,7 @@ impl Context {
             closure.param_count = param_count;
             closure.local_count = local_count;
             closure.var_ref_count = var_refs.len() as u8;
-            closure.reserved = 0;
+            closure.self_name_slot = self_name_slot;
 
             for (i, &vr_idx) in var_refs.iter().enumerate() {
                 closure.set_var_ref(i, vr_idx);

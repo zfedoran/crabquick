@@ -19,6 +19,9 @@ struct FunctionEntry {
     bytecode_index: HeapIndex,
     param_count: u8,
     local_count: u8,
+    /// For named function expressions: slot index where the function self-reference should be stored
+    /// 0xFF means no self-reference needed
+    self_name_slot: u8,
 }
 
 /// Virtual machine state
@@ -177,14 +180,16 @@ impl VM {
         self.function_table.reserve(func_count);
 
         for _ in 0..func_count {
-            // Read param_count (u8), local_count (u8), bytecode_len (u32), then bytecode bytes
-            if bytecode_slice.len() < offset + 6 {
+            // Read param_count (u8), local_count (u8), self_name_slot (u8), bytecode_len (u32), then bytecode bytes
+            if bytecode_slice.len() < offset + 7 {
                 return Err(self.throw_error(ctx, "Invalid bytecode: truncated function table"));
             }
 
             let param_count = bytecode_slice[offset];
             offset += 1;
             let local_count = bytecode_slice[offset];
+            offset += 1;
+            let self_name_slot = bytecode_slice[offset];
             offset += 1;
 
             let mut len_bytes = [0u8; 4];
@@ -216,6 +221,7 @@ impl VM {
                 bytecode_index: func_bc_index,
                 param_count,
                 local_count,
+                self_name_slot,
             });
         }
 
@@ -630,11 +636,12 @@ impl VM {
                         return Err(self.throw_error(ctx, "Function index out of bounds"));
                     }
 
-                    // Get the function entry to extract bytecode_index, param_count, local_count
+                    // Get the function entry to extract bytecode_index, param_count, local_count, self_name_slot
                     let func_entry = &self.function_table[func_idx as usize];
                     let bytecode_index = func_entry.bytecode_index;
                     let param_count = func_entry.param_count;
                     let local_count = func_entry.local_count;
+                    let self_name_slot = func_entry.self_name_slot;
 
                     // Get the captured var count from the next byte
                     // The compiler will emit: FClosure func_idx, captured_count, [var_ref indices...]
@@ -699,7 +706,7 @@ impl VM {
                     }
 
                     // Allocate the closure object with bytecode_index (not func table index!)
-                    let closure_idx = match ctx.alloc_closure(bytecode_index, param_count, local_count, &var_refs) {
+                    let closure_idx = match ctx.alloc_closure_with_self_name(bytecode_index, param_count, local_count, &var_refs, self_name_slot) {
                         Ok(idx) => idx,
                         Err(_) => return Err(self.throw_error(ctx, "Out of memory creating closure")),
                     };
@@ -1478,8 +1485,8 @@ impl VM {
                         };
 
                         // Get closure info - now uses bytecode_index directly!
-                        let (bytecode_index, param_count, local_count) = match ctx.get_closure(closure_idx) {
-                            Some(closure) => (closure.bytecode_index, closure.param_count as usize, closure.local_count as usize),
+                        let (bytecode_index, param_count, local_count, self_name_slot) = match ctx.get_closure(closure_idx) {
+                            Some(closure) => (closure.bytecode_index, closure.param_count as usize, closure.local_count as usize, closure.self_name_slot),
                             None => return Err(self.throw_error(ctx, "Invalid closure")),
                         };
 
@@ -1499,6 +1506,12 @@ impl VM {
                         for _ in param_count..local_count {
                             self.value_stack.push(JSValue::undefined())
                                 .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        // For named function expressions, set the function self-reference
+                        if self_name_slot != 0xFF {
+                            self.value_stack.set(base_sp + self_name_slot as usize, func)
+                                .map_err(|_| self.throw_error(ctx, "Invalid self_name_slot"))?;
                         }
 
                         // Push a call frame to track base_sp for nested closures
@@ -1611,8 +1624,8 @@ impl VM {
                             None => return Err(self.throw_error(ctx, "Invalid closure value")),
                         };
 
-                        let (bytecode_index, param_count, local_count) = match ctx.get_closure(closure_idx) {
-                            Some(closure) => (closure.bytecode_index, closure.param_count as usize, closure.local_count as usize),
+                        let (bytecode_index, param_count, local_count, self_name_slot) = match ctx.get_closure(closure_idx) {
+                            Some(closure) => (closure.bytecode_index, closure.param_count as usize, closure.local_count as usize, closure.self_name_slot),
                             None => return Err(self.throw_error(ctx, "Invalid closure")),
                         };
 
@@ -1629,6 +1642,12 @@ impl VM {
                         for _ in param_count..local_count {
                             self.value_stack.push(JSValue::undefined())
                                 .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                        }
+
+                        // For named function expressions, set the function self-reference
+                        if self_name_slot != 0xFF {
+                            self.value_stack.set(base_sp + self_name_slot as usize, func)
+                                .map_err(|_| self.throw_error(ctx, "Invalid self_name_slot"))?;
                         }
 
                         let frame = StackFrame::new_closure(func, base_sp, args.len() as u16, JSValue::undefined(), closure_idx);
@@ -2409,6 +2428,7 @@ impl VM {
         for _ in 0..func_count {
             let param_count = reader.read_u8().unwrap_or(0);
             let local_count = reader.read_u8().unwrap_or(0);
+            let self_name_slot = reader.read_u8().unwrap_or(0xFF);
             let bytecode_len = {
                 let mut bytes = [0u8; 4];
                 for i in 0..4 {
@@ -2454,6 +2474,7 @@ impl VM {
                 bytecode_index,
                 param_count,
                 local_count,
+                self_name_slot,
             });
         }
 
