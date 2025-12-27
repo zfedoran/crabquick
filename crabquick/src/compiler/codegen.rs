@@ -43,6 +43,30 @@ struct VarBinding {
     name: String,
     index: u8,
     kind: VarKind,
+    /// True if this variable is captured by a closure
+    is_captured: bool,
+}
+
+/// Where a variable is located
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum VarLocation {
+    /// Local variable at given index
+    Local(u8),
+    /// Captured variable at given var_ref index
+    Captured(u8),
+    /// Global variable (use atom table)
+    Global,
+}
+
+/// Captured variable info for closure creation
+#[derive(Debug, Clone)]
+struct CapturedVar {
+    /// Name of the variable
+    name: String,
+    /// Index in parent's local or captured vars
+    parent_index: u8,
+    /// True if captured from parent's captured vars, false if from parent's locals
+    from_capture: bool,
 }
 
 /// Scope for variable resolution
@@ -80,7 +104,7 @@ impl Scope {
 
     fn add_binding(&mut self, name: String, kind: VarKind) -> u8 {
         let index = self.next_index();
-        self.bindings.push(VarBinding { name, index, kind });
+        self.bindings.push(VarBinding { name, index, kind, is_captured: false });
         index
     }
 
@@ -95,6 +119,21 @@ impl Scope {
             parent.find_binding(name)
         } else {
             None
+        }
+    }
+
+    /// Mark a binding as captured by name
+    fn mark_captured(&mut self, name: &str) -> bool {
+        for binding in &mut self.bindings {
+            if binding.name == name {
+                binding.is_captured = true;
+                return true;
+            }
+        }
+        if let Some(ref mut parent) = self.parent {
+            parent.mark_captured(name)
+        } else {
+            false
         }
     }
 }
@@ -112,6 +151,8 @@ struct FunctionBytecode {
     bytecode: Vec<u8>,
     param_count: u8,
     local_count: u8,
+    /// Variables captured from outer scope (for closures)
+    captured_vars: Vec<CapturedVar>,
 }
 
 /// Code generator
@@ -129,6 +170,13 @@ pub struct CodeGenerator {
     atom_strings: Vec<String>,
     /// Function bytecode table
     function_bytecodes: Vec<FunctionBytecode>,
+    /// Variables captured from parent (when compiling a closure)
+    captured_vars: Vec<CapturedVar>,
+    /// Parent scope for closure variable lookup (reference to outer CodeGenerator's scope)
+    /// This is a flat list of accessible outer variables with their original indices
+    outer_vars: Vec<(String, u8)>,
+    /// Is this a closure (has access to outer scope)?
+    is_closure: bool,
 }
 
 impl CodeGenerator {
@@ -144,6 +192,27 @@ impl CodeGenerator {
             atom_table: BTreeMap::new(),
             atom_strings: Vec::new(),
             function_bytecodes: Vec::new(),
+            captured_vars: Vec::new(),
+            outer_vars: Vec::new(),
+            is_closure: false,
+        }
+    }
+
+    /// Creates a new code generator for a closure with access to outer variables
+    fn new_for_closure(outer_vars: Vec<(String, u8)>) -> Self {
+        CodeGenerator {
+            writer: BytecodeWriter::new(),
+            constants: ConstantPool::new(),
+            const_is_f64: Vec::new(),
+            labels: Vec::new(),
+            scope: Scope::new(),
+            loop_stack: Vec::new(),
+            atom_table: BTreeMap::new(),
+            atom_strings: Vec::new(),
+            function_bytecodes: Vec::new(),
+            captured_vars: Vec::new(),
+            outer_vars,
+            is_closure: true,
         }
     }
 
@@ -158,6 +227,42 @@ impl CodeGenerator {
         self.atom_strings.push(name.to_string());
         self.atom_table.insert(name.to_string(), atom_idx);
         atom_idx
+    }
+
+    /// Resolves a variable to its location (local, captured, or global)
+    /// If it's an outer variable that hasn't been captured yet, adds it to captured_vars
+    fn resolve_variable(&mut self, name: &str) -> VarLocation {
+        // First check local scope
+        if let Some((index, _kind)) = self.scope.find_binding(name) {
+            return VarLocation::Local(index);
+        }
+
+        // Check if this is a closure and we can access outer variables
+        if self.is_closure {
+            // Check if already captured
+            for (i, cv) in self.captured_vars.iter().enumerate() {
+                if cv.name == name {
+                    return VarLocation::Captured(i as u8);
+                }
+            }
+
+            // Check if available in outer scope
+            for (outer_name, outer_index) in &self.outer_vars {
+                if outer_name == name {
+                    // Add to captured vars
+                    let capture_index = self.captured_vars.len() as u8;
+                    self.captured_vars.push(CapturedVar {
+                        name: name.to_string(),
+                        parent_index: *outer_index,
+                        from_capture: false, // TODO: track if parent is also a closure
+                    });
+                    return VarLocation::Captured(capture_index);
+                }
+            }
+        }
+
+        // Not found - it's a global
+        VarLocation::Global
     }
 
     /// Generates bytecode for a program
@@ -231,10 +336,15 @@ impl CodeGenerator {
     /// Compiles a function body into bytecode
     ///
     /// Creates a new code generator with a fresh scope containing parameters,
-    /// compiles the function body, and returns the complete bytecode plus local count.
-    fn compile_function_body(&mut self, params: &[String], body: &[Stmt]) -> CodeGenResult<(Vec<u8>, u8)> {
-        // Create a new code generator for the function
-        let mut func_gen = CodeGenerator::new();
+    /// compiles the function body, and returns the complete bytecode plus local count
+    /// and captured variables.
+    fn compile_function_body(&mut self, params: &[String], body: &[Stmt]) -> CodeGenResult<(Vec<u8>, u8, Vec<CapturedVar>)> {
+        // Collect current scope bindings to make accessible to the function
+        let mut outer_vars = Vec::new();
+        self.collect_scope_vars(&self.scope.clone(), &mut outer_vars);
+
+        // Create a new code generator for the function with access to outer vars
+        let mut func_gen = CodeGenerator::new_for_closure(outer_vars);
 
         // Create a new scope and add parameters as local variables
         for param in params {
@@ -266,8 +376,21 @@ impl CodeGenerator {
         // Get the local count (includes params and local vars)
         let local_count = func_gen.scope.bindings.len() as u8;
 
+        // Get captured vars before consuming func_gen
+        let captured_vars = func_gen.captured_vars.clone();
+
         // Generate the complete bytecode (includes constant pool and atom table)
-        Ok((func_gen.generate_raw()?, local_count))
+        Ok((func_gen.generate_raw()?, local_count, captured_vars))
+    }
+
+    /// Collects all variable bindings from a scope hierarchy
+    fn collect_scope_vars(&self, scope: &Scope, vars: &mut Vec<(String, u8)>) {
+        for binding in &scope.bindings {
+            vars.push((binding.name.clone(), binding.index));
+        }
+        if let Some(ref parent) = scope.parent {
+            self.collect_scope_vars(parent, vars);
+        }
     }
 
     /// Generates raw bytecode without wrapping in a Program
@@ -428,8 +551,9 @@ impl CodeGenerator {
 
             Stmt::FunctionDecl { name, params, body, .. } => {
                 // Compile function body to bytecode
-                let (func_bytecode, local_count) = self.compile_function_body(params, body)?;
+                let (func_bytecode, local_count, captured_vars) = self.compile_function_body(params, body)?;
                 let param_count = params.len() as u8;
+                let has_captures = !captured_vars.is_empty();
 
                 // Add to function table
                 let func_index = self.function_bytecodes.len() as u16;
@@ -437,14 +561,24 @@ impl CodeGenerator {
                     bytecode: func_bytecode,
                     param_count,
                     local_count,
+                    captured_vars: captured_vars.clone(),
                 });
 
-                // Emit instruction to create function object from function table
-                // PushFunc8 takes a function table index and creates a function object
-                if func_index <= 255 {
-                    self.emit(Instruction::with_u8(Opcode::PushFunc8, func_index as u8));
+                if has_captures {
+                    // Emit FClosure which creates a closure with captured variables
+                    // Format: FClosure func_idx, captured_count, [local_idx...]
+                    self.emit(Instruction::with_u8(Opcode::FClosure, func_index as u8));
+                    self.writer.emit_u8(captured_vars.len() as u8);
+                    for cv in &captured_vars {
+                        self.writer.emit_u8(cv.parent_index);
+                    }
                 } else {
-                    self.emit(Instruction::with_u16(Opcode::PushFunc, func_index));
+                    // No captures - emit regular PushFunc
+                    if func_index <= 255 {
+                        self.emit(Instruction::with_u8(Opcode::PushFunc8, func_index as u8));
+                    } else {
+                        self.emit(Instruction::with_u16(Opcode::PushFunc, func_index));
+                    }
                 }
 
                 // Check if we're at global scope (no parent)
@@ -652,16 +786,22 @@ impl CodeGenerator {
                 Ok(())
             }
 
-            Expr::Identifier(name, loc) => {
-                if let Some((index, _)) = self.scope.find_binding(name) {
-                    self.emit(Instruction::with_u8(Opcode::GetLoc, index));
-                } else {
-                    // Global variable - emit GetGlobal
-                    let atom_id = self.get_or_create_atom(name);
-                    if atom_id <= 255 {
-                        self.emit(Instruction::with_atom8(Opcode::GetGlobal8, atom_id as u8));
-                    } else {
-                        self.emit(Instruction::with_atom16(Opcode::GetGlobal16, atom_id as u16));
+            Expr::Identifier(name, _loc) => {
+                match self.resolve_variable(name) {
+                    VarLocation::Local(index) => {
+                        self.emit(Instruction::with_u8(Opcode::GetLoc, index));
+                    }
+                    VarLocation::Captured(index) => {
+                        self.emit(Instruction::with_u8(Opcode::GetVarRef, index));
+                    }
+                    VarLocation::Global => {
+                        // Global variable - emit GetGlobal
+                        let atom_id = self.get_or_create_atom(name);
+                        if atom_id <= 255 {
+                            self.emit(Instruction::with_atom8(Opcode::GetGlobal8, atom_id as u8));
+                        } else {
+                            self.emit(Instruction::with_atom16(Opcode::GetGlobal16, atom_id as u16));
+                        }
                     }
                 }
                 Ok(())
@@ -744,57 +884,77 @@ impl CodeGenerator {
 
                 match arg.as_ref() {
                     Expr::Identifier(name, _) => {
-                        if let Some((index, _)) = self.scope.find_binding(name) {
-                            // Local variable
-                            if *prefix {
-                                // ++i or --i: get, add/sub 1, store (leave new value)
-                                self.emit(Instruction::with_u8(Opcode::GetLoc, index));
-                                self.emit_simple(Opcode::Push1);
-                                self.emit_simple(add_opcode);
-                                self.emit(Instruction::with_u8(Opcode::SetLoc, index));
-                            } else {
-                                // i++ or i--: get, dup, add/sub 1, store (leave old value)
-                                self.emit(Instruction::with_u8(Opcode::GetLoc, index));
-                                self.emit_simple(Opcode::Dup);
-                                self.emit_simple(Opcode::Push1);
-                                self.emit_simple(add_opcode);
-                                self.emit(Instruction::with_u8(Opcode::PutLoc, index));
+                        match self.resolve_variable(name) {
+                            VarLocation::Local(index) => {
+                                // Local variable
+                                if *prefix {
+                                    // ++i or --i: get, add/sub 1, store (leave new value)
+                                    self.emit(Instruction::with_u8(Opcode::GetLoc, index));
+                                    self.emit_simple(Opcode::Push1);
+                                    self.emit_simple(add_opcode);
+                                    self.emit(Instruction::with_u8(Opcode::SetLoc, index));
+                                } else {
+                                    // i++ or i--: get, dup, add/sub 1, store (leave old value)
+                                    self.emit(Instruction::with_u8(Opcode::GetLoc, index));
+                                    self.emit_simple(Opcode::Dup);
+                                    self.emit_simple(Opcode::Push1);
+                                    self.emit_simple(add_opcode);
+                                    self.emit(Instruction::with_u8(Opcode::PutLoc, index));
+                                }
                             }
-                        } else {
-                            // Global variable
-                            let atom_id = self.get_or_create_atom(name);
-                            let get_op = if atom_id <= 255 { Opcode::GetGlobal8 } else { Opcode::GetGlobal16 };
+                            VarLocation::Captured(index) => {
+                                // Captured variable
+                                if *prefix {
+                                    // ++i or --i: get, add/sub 1, store (leave new value)
+                                    self.emit(Instruction::with_u8(Opcode::GetVarRef, index));
+                                    self.emit_simple(Opcode::Push1);
+                                    self.emit_simple(add_opcode);
+                                    self.emit(Instruction::with_u8(Opcode::SetVarRef, index));
+                                } else {
+                                    // i++ or i--: get, dup, add/sub 1, store (leave old value)
+                                    self.emit(Instruction::with_u8(Opcode::GetVarRef, index));
+                                    self.emit_simple(Opcode::Dup);
+                                    self.emit_simple(Opcode::Push1);
+                                    self.emit_simple(add_opcode);
+                                    self.emit(Instruction::with_u8(Opcode::PutVarRef, index));
+                                }
+                            }
+                            VarLocation::Global => {
+                                // Global variable
+                                let atom_id = self.get_or_create_atom(name);
+                                let get_op = if atom_id <= 255 { Opcode::GetGlobal8 } else { Opcode::GetGlobal16 };
 
-                            if *prefix {
-                                // ++x or --x (global): get, add/sub 1, store (leave new value)
-                                if atom_id <= 255 {
-                                    self.emit(Instruction::with_u8(get_op, atom_id as u8));
+                                if *prefix {
+                                    // ++x or --x (global): get, add/sub 1, store (leave new value)
+                                    if atom_id <= 255 {
+                                        self.emit(Instruction::with_u8(get_op, atom_id as u8));
+                                    } else {
+                                        self.emit(Instruction::with_u16(get_op, atom_id as u16));
+                                    }
+                                    self.emit_simple(Opcode::Push1);
+                                    self.emit_simple(add_opcode);
+                                    // SetGlobal leaves value on stack
+                                    if atom_id <= 255 {
+                                        self.emit(Instruction::with_u8(Opcode::SetGlobal8, atom_id as u8));
+                                    } else {
+                                        self.emit(Instruction::with_u16(Opcode::SetGlobal16, atom_id as u16));
+                                    }
                                 } else {
-                                    self.emit(Instruction::with_u16(get_op, atom_id as u16));
-                                }
-                                self.emit_simple(Opcode::Push1);
-                                self.emit_simple(add_opcode);
-                                // SetGlobal leaves value on stack
-                                if atom_id <= 255 {
-                                    self.emit(Instruction::with_u8(Opcode::SetGlobal8, atom_id as u8));
-                                } else {
-                                    self.emit(Instruction::with_u16(Opcode::SetGlobal16, atom_id as u16));
-                                }
-                            } else {
-                                // x++ or x-- (global): get, dup, add/sub 1, store (leave old value)
-                                if atom_id <= 255 {
-                                    self.emit(Instruction::with_u8(get_op, atom_id as u8));
-                                } else {
-                                    self.emit(Instruction::with_u16(get_op, atom_id as u16));
-                                }
-                                self.emit_simple(Opcode::Dup);
-                                self.emit_simple(Opcode::Push1);
-                                self.emit_simple(add_opcode);
-                                // PutGlobal pops the value
-                                if atom_id <= 255 {
-                                    self.emit(Instruction::with_u8(Opcode::PutGlobal8, atom_id as u8));
-                                } else {
-                                    self.emit(Instruction::with_u16(Opcode::PutGlobal16, atom_id as u16));
+                                    // x++ or x-- (global): get, dup, add/sub 1, store (leave old value)
+                                    if atom_id <= 255 {
+                                        self.emit(Instruction::with_u8(get_op, atom_id as u8));
+                                    } else {
+                                        self.emit(Instruction::with_u16(get_op, atom_id as u16));
+                                    }
+                                    self.emit_simple(Opcode::Dup);
+                                    self.emit_simple(Opcode::Push1);
+                                    self.emit_simple(add_opcode);
+                                    // PutGlobal pops the value
+                                    if atom_id <= 255 {
+                                        self.emit(Instruction::with_u8(Opcode::PutGlobal8, atom_id as u8));
+                                    } else {
+                                        self.emit(Instruction::with_u16(Opcode::PutGlobal16, atom_id as u16));
+                                    }
                                 }
                             }
                         }
@@ -822,38 +982,51 @@ impl CodeGenerator {
                 // Handle assignment target
                 match left.as_ref() {
                     Expr::Identifier(name, _) => {
-                        if let Some((index, _)) = self.scope.find_binding(name) {
-                            // Local variable
-                            let opcode = if matches!(op, AssignOp::Assign) {
-                                Opcode::SetLoc
-                            } else {
-                                // Compound assignment - need to load, operate, store
-                                Opcode::PutLoc
-                            };
-                            self.emit(Instruction::with_u8(opcode, index));
-                        } else {
-                            // Global variable
-                            let atom_id = self.get_or_create_atom(name);
-                            let opcode = if matches!(op, AssignOp::Assign) {
-                                // Use SetGlobal to return the value
-                                if atom_id <= 255 {
-                                    Opcode::SetGlobal8
+                        match self.resolve_variable(name) {
+                            VarLocation::Local(index) => {
+                                // Local variable
+                                let opcode = if matches!(op, AssignOp::Assign) {
+                                    Opcode::SetLoc
                                 } else {
-                                    Opcode::SetGlobal16
-                                }
-                            } else {
-                                // Compound assignment - use PutGlobal (doesn't return value)
-                                if atom_id <= 255 {
-                                    Opcode::PutGlobal8
+                                    // Compound assignment - need to load, operate, store
+                                    Opcode::PutLoc
+                                };
+                                self.emit(Instruction::with_u8(opcode, index));
+                            }
+                            VarLocation::Captured(index) => {
+                                // Captured variable
+                                let opcode = if matches!(op, AssignOp::Assign) {
+                                    Opcode::SetVarRef
                                 } else {
-                                    Opcode::PutGlobal16
-                                }
-                            };
+                                    // Compound assignment
+                                    Opcode::PutVarRef
+                                };
+                                self.emit(Instruction::with_u8(opcode, index));
+                            }
+                            VarLocation::Global => {
+                                // Global variable
+                                let atom_id = self.get_or_create_atom(name);
+                                let opcode = if matches!(op, AssignOp::Assign) {
+                                    // Use SetGlobal to return the value
+                                    if atom_id <= 255 {
+                                        Opcode::SetGlobal8
+                                    } else {
+                                        Opcode::SetGlobal16
+                                    }
+                                } else {
+                                    // Compound assignment - use PutGlobal (doesn't return value)
+                                    if atom_id <= 255 {
+                                        Opcode::PutGlobal8
+                                    } else {
+                                        Opcode::PutGlobal16
+                                    }
+                                };
 
-                            if atom_id <= 255 {
-                                self.emit(Instruction::with_atom8(opcode, atom_id as u8));
-                            } else {
-                                self.emit(Instruction::with_atom16(opcode, atom_id as u16));
+                                if atom_id <= 255 {
+                                    self.emit(Instruction::with_atom8(opcode, atom_id as u8));
+                                } else {
+                                    self.emit(Instruction::with_atom16(opcode, atom_id as u16));
+                                }
                             }
                         }
                     }
