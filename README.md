@@ -22,12 +22,12 @@ The engine is ~80% complete:
 
 Missing for mquickjs parity:
 
-- JSON.parse/stringify
 - RegExp 
 - Typed Arrays
 - Error types (TypeError, ReferenceError, etc.)
 - Date.now() 
 - Exponentiation
+- Passing tests/test_language.js
 
 -----------------------------
 
