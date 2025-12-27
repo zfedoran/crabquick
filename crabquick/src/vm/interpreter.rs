@@ -1369,6 +1369,273 @@ impl VM {
                 }
             }
 
+            // ===== Local Variable Access =====
+            GetLoc => {
+                if let Operand::U8(idx) = instruction.operand {
+                    // Get local variable from the value stack
+                    // At top level, locals start at the base of the current frame
+                    let base_sp = match self.call_stack.current() {
+                        Ok(frame) => frame.sp,
+                        Err(_) => return Err(self.throw_error(ctx, "No call frame")),
+                    };
+
+                    let local_val = self.value_stack.get(base_sp + idx as usize)
+                        .map_err(|_| self.throw_error(ctx, "Invalid local variable index"))?;
+                    self.value_stack.push(local_val)
+                        .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for GetLoc"))
+                }
+            }
+
+            PutLoc => {
+                if let Operand::U8(idx) = instruction.operand {
+                    let val = self.value_stack.pop()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    let base_sp = match self.call_stack.current() {
+                        Ok(frame) => frame.sp,
+                        Err(_) => return Err(self.throw_error(ctx, "No call frame")),
+                    };
+                    let target_idx = base_sp + idx as usize;
+
+                    // Ensure we have enough space for this local
+                    while self.value_stack.len() <= target_idx {
+                        self.value_stack.push(JSValue::undefined())
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    }
+
+                    self.value_stack.set(target_idx, val)
+                        .map_err(|_| self.throw_error(ctx, "Invalid local variable index"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for PutLoc"))
+                }
+            }
+
+            SetLoc => {
+                if let Operand::U8(idx) = instruction.operand {
+                    let val = self.value_stack.peek()
+                        .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                    let base_sp = match self.call_stack.current() {
+                        Ok(frame) => frame.sp,
+                        Err(_) => return Err(self.throw_error(ctx, "No call frame")),
+                    };
+                    let target_idx = base_sp + idx as usize;
+
+                    // Ensure we have enough space for this local
+                    while self.value_stack.len() <= target_idx {
+                        self.value_stack.push(JSValue::undefined())
+                            .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                    }
+
+                    self.value_stack.set(target_idx, val)
+                        .map_err(|_| self.throw_error(ctx, "Invalid local variable index"))?;
+                    Ok(None)
+                } else {
+                    Err(self.throw_error(ctx, "Invalid operand for SetLoc"))
+                }
+            }
+
+            // ===== Object/Array Creation =====
+            Array => {
+                // Create new array object
+                let arr = ctx.new_object()
+                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                // Initialize length to 0
+                let length_atom = crate::runtime::init::string_to_atom("length");
+                let zero = ctx.new_number(0.0)
+                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                ctx.add_property(arr, length_atom, zero, crate::object::PropertyFlags::default())
+                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                self.value_stack.push(arr)
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                Ok(None)
+            }
+
+            // ===== Array/Object Element Access =====
+            GetArrayEl => {
+                // Stack: [obj, index] -> [value]
+                let index = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                let obj = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                // Convert index to number
+                let idx_num = if let Some(i) = index.to_int() {
+                    i as f64
+                } else if let Some(n) = ctx.get_number(index) {
+                    n
+                } else {
+                    0.0
+                };
+
+                // Convert number to property key (toString)
+                let key_str = alloc::format!("{}", idx_num as i32);
+
+                // Create atom for the property key
+                let mut hash: u32 = 5381;
+                for byte in key_str.bytes() {
+                    hash = hash.wrapping_mul(33).wrapping_add(byte as u32);
+                }
+                let key = crate::value::JSAtom::from_id(hash);
+
+                // Get the property
+                let value = ctx.get_property(obj, key)
+                    .unwrap_or(JSValue::undefined());
+
+                self.value_stack.push(value)
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                Ok(None)
+            }
+
+            PutArrayEl => {
+                // Stack: [obj, index, value] -> [obj]
+                let value = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                let index = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+                let obj = self.value_stack.peek()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                // Convert index to number
+                let idx_num = if let Some(i) = index.to_int() {
+                    i as f64
+                } else if let Some(n) = ctx.get_number(index) {
+                    n
+                } else {
+                    0.0
+                };
+
+                // Convert number to property key (toString)
+                let key_str = alloc::format!("{}", idx_num as i32);
+
+                // Create atom for the property key
+                let mut hash: u32 = 5381;
+                for byte in key_str.bytes() {
+                    hash = hash.wrapping_mul(33).wrapping_add(byte as u32);
+                }
+                let key = crate::value::JSAtom::from_id(hash);
+
+                // Set the property
+                ctx.add_property(obj, key, value, crate::object::PropertyFlags::default())
+                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                // Update length property if this is a numeric index
+                if idx_num >= 0.0 && idx_num == libm::floor(idx_num) {
+                    let length_atom = crate::runtime::init::string_to_atom("length");
+
+                    // Get current length (defaults to 0)
+                    let current_length = ctx.get_property(obj, length_atom)
+                        .and_then(|v| ctx.get_number(v))
+                        .unwrap_or(0.0);
+
+                    // New length should be max of current and idx + 1
+                    let new_length = f64::max(current_length, idx_num + 1.0);
+
+                    let new_length_val = ctx.new_number(new_length)
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+
+                    // Always add the property (this creates a duplicate, but get_property
+                    // should find the most recent one if the hash table is searched properly)
+                    // TODO: Implement proper property update mechanism
+                    ctx.add_property(obj, length_atom, new_length_val, crate::object::PropertyFlags::default())
+                        .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                }
+
+                // Leave obj on stack
+                Ok(None)
+            }
+
+            // ===== Increment/Decrement Operators =====
+            Inc => {
+                // ++x: pop value, increment, push result
+                let val = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                let num = if let Some(i) = val.to_int() {
+                    i as f64 + 1.0
+                } else if let Some(f) = ctx.get_number(val) {
+                    f + 1.0
+                } else {
+                    f64::NAN
+                };
+
+                let result = ctx.new_number(num)
+                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                self.value_stack.push(result)
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                Ok(None)
+            }
+
+            Dec => {
+                // --x: pop value, decrement, push result
+                let val = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                let num = if let Some(i) = val.to_int() {
+                    i as f64 - 1.0
+                } else if let Some(f) = ctx.get_number(val) {
+                    f - 1.0
+                } else {
+                    f64::NAN
+                };
+
+                let result = ctx.new_number(num)
+                    .map_err(|_| self.throw_error(ctx, "Out of memory"))?;
+                self.value_stack.push(result)
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+                Ok(None)
+            }
+
+            PostInc => {
+                // x++: pop value, push original, increment and store
+                // Note: This needs special handling in codegen to work with lvalues
+                let val = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                let num = if let Some(i) = val.to_int() {
+                    i as f64
+                } else if let Some(f) = ctx.get_number(val) {
+                    f
+                } else {
+                    f64::NAN
+                };
+
+                // Push original value (this is what the expression returns)
+                self.value_stack.push(val)
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+
+                // The incremented value should be stored by the calling code
+                // For now, this is a simplified implementation
+                Ok(None)
+            }
+
+            PostDec => {
+                // x--: pop value, push original, decrement and store
+                let val = self.value_stack.pop()
+                    .map_err(|_| self.throw_error(ctx, "Stack underflow"))?;
+
+                let num = if let Some(i) = val.to_int() {
+                    i as f64
+                } else if let Some(f) = ctx.get_number(val) {
+                    f
+                } else {
+                    f64::NAN
+                };
+
+                // Push original value (this is what the expression returns)
+                self.value_stack.push(val)
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+
+                // The decremented value should be stored by the calling code
+                Ok(None)
+            }
+
             // ===== Unimplemented Opcodes =====
             // These are stubs that need full implementation
             _ => {

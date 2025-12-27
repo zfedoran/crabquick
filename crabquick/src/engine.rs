@@ -866,4 +866,521 @@ mod tests {
         let num = engine.context.get_number(result).expect("Should be a number");
         assert!(num.is_nan(), "Invalid string should convert to NaN");
     }
+
+    // ========== Critical Bug Tests ==========
+    // These tests cover bugs discovered during the examples review.
+    // Tests marked with #[ignore] are expected to fail until the bugs are fixed.
+
+    // ---------- Bug 1: Array Indexing Returns Wrong Values ----------
+
+    #[test]
+    #[ignore] // Bug: Array indexing returns the index instead of the value
+    fn test_array_indexing_first_element() {
+        let mut engine = Engine::new(32768);
+        // [10, 20, 30][0] should return 10, not 0
+        let result = engine.eval("[10, 20, 30][0]").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 10, "Array indexing [0] should return 10");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 10.0, "Array indexing [0] should return 10");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Array indexing returns the index instead of the value
+    fn test_array_indexing_middle_element() {
+        let mut engine = Engine::new(32768);
+        // [10, 20, 30][1] should return 20, not 1
+        let result = engine.eval("[10, 20, 30][1]").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 20, "Array indexing [1] should return 20");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 20.0, "Array indexing [1] should return 20");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Array indexing returns the index instead of the value
+    fn test_array_indexing_last_element() {
+        let mut engine = Engine::new(32768);
+        // [10, 20, 30][2] should return 30, not 2
+        let result = engine.eval("[10, 20, 30][2]").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 30, "Array indexing [2] should return 30");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 30.0, "Array indexing [2] should return 30");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Array indexing returns the index instead of the value
+    fn test_array_indexing_with_variable() {
+        let mut engine = Engine::new(32768);
+        // Test that indexing with a variable also works correctly
+        let result = engine.eval("var arr = [5, 10, 15]; arr[1]").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 10, "Variable array indexing should return 10");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 10.0, "Variable array indexing should return 10");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Array indexing returns the index instead of the value
+    fn test_array_indexing_expression_index() {
+        let mut engine = Engine::new(32768);
+        // Test indexing with an expression
+        let result = engine.eval("[100, 200, 300][1 + 1]").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 300, "Array indexing with expression should return 300");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 300.0, "Array indexing with expression should return 300");
+        }
+    }
+
+    // ---------- Bug 2: For-Loop Stack Underflow ----------
+
+    #[test]
+    #[ignore] // Bug: For-loop with assignment update causes stack underflow
+    fn test_for_loop_basic_assignment_update() {
+        let mut engine = Engine::new(32768);
+        // Basic for-loop with assignment update: for (var i = 0; i < 3; i = i + 1)
+        let result = engine.eval(
+            "var sum = 0; for (var i = 0; i < 3; i = i + 1) { sum = sum + i; } sum"
+        ).unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 3, "For-loop should sum 0+1+2 = 3");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 3.0, "For-loop should sum 0+1+2 = 3");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: For-loop with assignment update causes stack underflow
+    fn test_for_loop_count_iterations() {
+        let mut engine = Engine::new(32768);
+        // Test that the loop executes the correct number of times
+        let result = engine.eval(
+            "var count = 0; for (var i = 0; i < 5; i = i + 1) { count = count + 1; } count"
+        ).unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 5, "For-loop should iterate 5 times");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 5.0, "For-loop should iterate 5 times");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: For-loop with assignment update causes stack underflow
+    fn test_for_loop_accumulator_pattern() {
+        let mut engine = Engine::new(32768);
+        // Test accumulator pattern in for-loop
+        let result = engine.eval(
+            "var total = 0; for (var i = 1; i < 6; i = i + 1) { total = total + i; } total"
+        ).unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 15, "For-loop should sum 1+2+3+4+5 = 15");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 15.0, "For-loop should sum 1+2+3+4+5 = 15");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: For-loop with assignment update causes stack underflow
+    fn test_for_loop_no_initialization() {
+        let mut engine = Engine::new(32768);
+        // Test for-loop without initialization
+        let result = engine.eval(
+            "var i = 0; var sum = 0; for (; i < 4; i = i + 1) { sum = sum + 1; } sum"
+        ).unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 4, "For-loop without init should iterate 4 times");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 4.0, "For-loop without init should iterate 4 times");
+        }
+    }
+
+    // ---------- Bug 3: Increment/Decrement Operators ----------
+
+    #[test]
+    #[ignore] // Bug: Postfix increment not implemented
+    fn test_postfix_increment_returns_old_value() {
+        let mut engine = Engine::new(32768);
+        // i++ should return the old value and then increment
+        let result = engine.eval("var i = 5; i++").unwrap();
+        if let Some(val) = result.to_int() {
+            assert_eq!(val, 5, "Postfix increment should return old value (5)");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 5.0, "Postfix increment should return old value (5)");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Postfix increment not implemented
+    fn test_postfix_increment_updates_variable() {
+        let mut engine = Engine::new(32768);
+        // After i++, the variable should be incremented
+        let result = engine.eval("var i = 5; i++; i").unwrap();
+        if let Some(val) = result.to_int() {
+            assert_eq!(val, 6, "Variable should be incremented to 6");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 6.0, "Variable should be incremented to 6");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Prefix increment not implemented
+    fn test_prefix_increment_returns_new_value() {
+        let mut engine = Engine::new(32768);
+        // ++i should increment and return the new value
+        let result = engine.eval("var i = 5; ++i").unwrap();
+        if let Some(val) = result.to_int() {
+            assert_eq!(val, 6, "Prefix increment should return new value (6)");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 6.0, "Prefix increment should return new value (6)");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Prefix increment not implemented
+    fn test_prefix_increment_updates_variable() {
+        let mut engine = Engine::new(32768);
+        // After ++i, the variable should be incremented
+        let result = engine.eval("var i = 5; ++i; i").unwrap();
+        if let Some(val) = result.to_int() {
+            assert_eq!(val, 6, "Variable should be incremented to 6");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 6.0, "Variable should be incremented to 6");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Postfix decrement not implemented
+    fn test_postfix_decrement_returns_old_value() {
+        let mut engine = Engine::new(32768);
+        // i-- should return the old value and then decrement
+        let result = engine.eval("var i = 10; i--").unwrap();
+        if let Some(val) = result.to_int() {
+            assert_eq!(val, 10, "Postfix decrement should return old value (10)");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 10.0, "Postfix decrement should return old value (10)");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Postfix decrement not implemented
+    fn test_postfix_decrement_updates_variable() {
+        let mut engine = Engine::new(32768);
+        // After i--, the variable should be decremented
+        let result = engine.eval("var i = 10; i--; i").unwrap();
+        if let Some(val) = result.to_int() {
+            assert_eq!(val, 9, "Variable should be decremented to 9");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 9.0, "Variable should be decremented to 9");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Prefix decrement not implemented
+    fn test_prefix_decrement_returns_new_value() {
+        let mut engine = Engine::new(32768);
+        // --i should decrement and return the new value
+        let result = engine.eval("var i = 10; --i").unwrap();
+        if let Some(val) = result.to_int() {
+            assert_eq!(val, 9, "Prefix decrement should return new value (9)");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 9.0, "Prefix decrement should return new value (9)");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Prefix decrement not implemented
+    fn test_prefix_decrement_updates_variable() {
+        let mut engine = Engine::new(32768);
+        // After --i, the variable should be decremented
+        let result = engine.eval("var i = 10; --i; i").unwrap();
+        if let Some(val) = result.to_int() {
+            assert_eq!(val, 9, "Variable should be decremented to 9");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 9.0, "Variable should be decremented to 9");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Increment/decrement operators not implemented
+    fn test_increment_in_for_loop() {
+        let mut engine = Engine::new(32768);
+        // Test using i++ in a for-loop (common pattern)
+        let result = engine.eval(
+            "var sum = 0; for (var i = 0; i < 5; i++) { sum = sum + i; } sum"
+        ).unwrap();
+        if let Some(val) = result.to_int() {
+            assert_eq!(val, 10, "For-loop with i++ should sum 0+1+2+3+4 = 10");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 10.0, "For-loop with i++ should sum 0+1+2+3+4 = 10");
+        }
+    }
+
+    // ---------- Bug 4: Missing Math Methods ----------
+
+    #[test]
+    #[ignore] // Bug: Math.pow not implemented
+    fn test_math_pow_basic() {
+        let mut engine = Engine::new(32768);
+        // Math.pow(2, 8) should return 256
+        let result = engine.eval("Math.pow(2, 8)").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 256, "Math.pow(2, 8) should return 256");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 256.0, "Math.pow(2, 8) should return 256");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Math.pow not implemented
+    fn test_math_pow_cube() {
+        let mut engine = Engine::new(32768);
+        // Math.pow(3, 3) should return 27
+        let result = engine.eval("Math.pow(3, 3)").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 27, "Math.pow(3, 3) should return 27");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 27.0, "Math.pow(3, 3) should return 27");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Math.pow not implemented
+    fn test_math_pow_square() {
+        let mut engine = Engine::new(32768);
+        // Math.pow(5, 2) should return 25
+        let result = engine.eval("Math.pow(5, 2)").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 25, "Math.pow(5, 2) should return 25");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 25.0, "Math.pow(5, 2) should return 25");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Math.sqrt not implemented
+    fn test_math_sqrt_basic() {
+        let mut engine = Engine::new(32768);
+        // Math.sqrt(16) should return 4
+        let result = engine.eval("Math.sqrt(16)").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 4, "Math.sqrt(16) should return 4");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 4.0, "Math.sqrt(16) should return 4");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Math.sqrt not implemented
+    fn test_math_sqrt_perfect_squares() {
+        let mut engine = Engine::new(32768);
+        // Math.sqrt(9) should return 3
+        let result = engine.eval("Math.sqrt(9)").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 3, "Math.sqrt(9) should return 3");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 3.0, "Math.sqrt(9) should return 3");
+        }
+
+        // Math.sqrt(64) should return 8
+        let result = engine.eval("Math.sqrt(64)").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 8, "Math.sqrt(64) should return 8");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 8.0, "Math.sqrt(64) should return 8");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Math.sqrt not implemented
+    fn test_math_sqrt_non_perfect_square() {
+        let mut engine = Engine::new(32768);
+        // Math.sqrt(2) should return approximately 1.414
+        let result = engine.eval("Math.sqrt(2)").unwrap();
+        let num = engine.context.get_number(result).expect("Should be a number");
+        assert!((num - 1.414213).abs() < 0.001, "Math.sqrt(2) should be ~1.414");
+    }
+
+    // ---------- Bug 5: Array.length Property ----------
+
+    #[test]
+    #[ignore] // Bug: Array.length property not implemented
+    fn test_array_length_basic() {
+        let mut engine = Engine::new(32768);
+        // [1, 2, 3].length should return 3
+        let result = engine.eval("[1, 2, 3].length").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 3, "Array length should be 3");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 3.0, "Array length should be 3");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Array.length property not implemented
+    fn test_array_length_empty() {
+        let mut engine = Engine::new(32768);
+        // [].length should return 0
+        let result = engine.eval("[].length").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 0, "Empty array length should be 0");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 0.0, "Empty array length should be 0");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Array.length property not implemented
+    fn test_array_length_large() {
+        let mut engine = Engine::new(32768);
+        // Test with larger array
+        let result = engine.eval("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].length").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 10, "Array length should be 10");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 10.0, "Array length should be 10");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Array.length property not implemented
+    fn test_array_length_variable() {
+        let mut engine = Engine::new(32768);
+        // Test length on variable-stored array
+        let result = engine.eval("var arr = [1, 2, 3, 4]; arr.length").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 4, "Variable array length should be 4");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 4.0, "Variable array length should be 4");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Array.length property not implemented
+    fn test_array_length_in_expression() {
+        let mut engine = Engine::new(32768);
+        // Test using length in an expression
+        let result = engine.eval("[1, 2, 3, 4, 5].length * 2").unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 10, "Array length * 2 should be 10");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 10.0, "Array length * 2 should be 10");
+        }
+    }
+
+    // ---------- Bug 6: Object Method Calls ----------
+
+    #[test]
+    #[ignore] // Bug: Object method calls not working
+    fn test_object_method_call_basic() {
+        let mut engine = Engine::new(32768);
+        // Function stored in object property should be callable
+        let result = engine.eval(
+            "var obj = { method: function() { return 42; } }; obj.method()"
+        ).unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 42, "Object method should return 42");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 42.0, "Object method should return 42");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Object method calls not working
+    fn test_object_method_with_args() {
+        let mut engine = Engine::new(32768);
+        // Object method with arguments
+        let result = engine.eval(
+            "var obj = { add: function(a, b) { return a + b; } }; obj.add(10, 20)"
+        ).unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 30, "Object method should return 30");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 30.0, "Object method should return 30");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Object method calls not working
+    fn test_object_method_accessing_this() {
+        let mut engine = Engine::new(32768);
+        // Object method accessing 'this'
+        let result = engine.eval(
+            "var obj = { value: 100, getValue: function() { return this.value; } }; obj.getValue()"
+        ).unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 100, "Object method should access this.value and return 100");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 100.0, "Object method should access this.value and return 100");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Object method calls not working
+    fn test_object_method_modifying_this() {
+        let mut engine = Engine::new(32768);
+        // Object method modifying 'this'
+        let result = engine.eval(
+            "var obj = { count: 0, increment: function() { this.count = this.count + 1; return this.count; } }; obj.increment()"
+        ).unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 1, "Object method should increment and return 1");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 1.0, "Object method should increment and return 1");
+        }
+    }
+
+    #[test]
+    #[ignore] // Bug: Object method calls not working
+    fn test_object_multiple_methods() {
+        let mut engine = Engine::new(32768);
+        // Object with multiple methods
+        let result = engine.eval(
+            "var calc = { add: function(a, b) { return a + b; }, multiply: function(a, b) { return a * b; } }; calc.add(5, 3) + calc.multiply(2, 4)"
+        ).unwrap();
+        if let Some(i) = result.to_int() {
+            assert_eq!(i, 16, "Should calculate (5+3) + (2*4) = 16");
+        } else {
+            let num = engine.context.get_number(result).expect("Should be a number");
+            assert_eq!(num, 16.0, "Should calculate (5+3) + (2*4) = 16");
+        }
+    }
 }

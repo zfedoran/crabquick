@@ -903,13 +903,47 @@ impl CodeGenerator {
             }
 
             Expr::Array { elements, .. } => {
-                // Create array
-                let count = elements.len() as u8;
-                self.emit(Instruction::with_u8(Opcode::Array, count));
+                // Create empty array object
+                self.emit(Instruction::with_u8(Opcode::Array, 0));
 
-                // For now, just push undefined for each element
-                for _ in elements {
-                    self.emit_simple(Opcode::Undefined);
+                // For each element, we need to:
+                // 1. Dup the array object on the stack
+                // 2. Push the index
+                // 3. Push the element value
+                // 4. Call PutArrayEl to store it
+                for (i, elem_opt) in elements.iter().enumerate() {
+                    // Duplicate array ref
+                    self.emit_simple(Opcode::Dup);
+
+                    // Push index
+                    if i <= 7 {
+                        let opcode = match i {
+                            0 => Opcode::Push0,
+                            1 => Opcode::Push1,
+                            2 => Opcode::Push2,
+                            3 => Opcode::Push3,
+                            4 => Opcode::Push4,
+                            5 => Opcode::Push5,
+                            6 => Opcode::Push6,
+                            7 => Opcode::Push7,
+                            _ => unreachable!(),
+                        };
+                        self.emit_simple(opcode);
+                    } else if i <= 127 {
+                        self.emit(Instruction::with_i8(Opcode::PushI8, i as i8));
+                    } else {
+                        self.emit(Instruction::with_i16(Opcode::PushI16, i as i16));
+                    }
+
+                    // Push element value (or undefined for holes)
+                    if let Some(elem) = elem_opt {
+                        self.gen_expr(elem)?;
+                    } else {
+                        self.emit_simple(Opcode::Undefined);
+                    }
+
+                    // Store: [arr, index, value] -> [arr]
+                    self.emit_simple(Opcode::PutArrayEl);
                 }
 
                 Ok(())

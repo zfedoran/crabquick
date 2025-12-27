@@ -368,6 +368,14 @@ fn install_math_object(ctx: &mut Context, global: JSValue) -> Result<(), JSValue
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, math, "max", max_fn)?;
 
+    let pow_fn = ctx.new_native_function(native_functions::math_pow, 2)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, math, "pow", pow_fn)?;
+
+    let sqrt_fn = ctx.new_native_function(native_functions::math_sqrt, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, math, "sqrt", sqrt_fn)?;
+
     // Set Math on global
     set_property(ctx, global, "Math", math)?;
 

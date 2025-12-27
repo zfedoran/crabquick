@@ -128,6 +128,52 @@ pub fn math_max(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<J
         .map_err(|_| ctx.new_string("Out of memory").unwrap_or(JSValue::undefined()))
 }
 
+/// Math.pow() wrapper
+pub fn math_pow(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let base = if args.is_empty() {
+        f64::NAN
+    } else if let Some(i) = args[0].to_int() {
+        i as f64
+    } else if let Some(f) = ctx.get_number(args[0]) {
+        f
+    } else {
+        f64::NAN
+    };
+
+    let exp = if args.len() < 2 {
+        f64::NAN
+    } else if let Some(i) = args[1].to_int() {
+        i as f64
+    } else if let Some(f) = ctx.get_number(args[1]) {
+        f
+    } else {
+        f64::NAN
+    };
+
+    let result = libm::pow(base, exp);
+
+    ctx.new_number(result)
+        .map_err(|_| ctx.new_string("Out of memory").unwrap_or(JSValue::undefined()))
+}
+
+/// Math.sqrt() wrapper
+pub fn math_sqrt(ctx: &mut Context, _this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let num = if args.is_empty() {
+        f64::NAN
+    } else if let Some(i) = args[0].to_int() {
+        i as f64
+    } else if let Some(f) = ctx.get_number(args[0]) {
+        f
+    } else {
+        f64::NAN
+    };
+
+    let result = libm::sqrt(num);
+
+    ctx.new_number(result)
+        .map_err(|_| ctx.new_string("Out of memory").unwrap_or(JSValue::undefined()))
+}
+
 // ========== Console Functions ==========
 
 /// console.log() wrapper
