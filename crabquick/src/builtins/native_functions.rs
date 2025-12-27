@@ -303,6 +303,55 @@ pub fn array_is_array_native(ctx: &mut Context, _this: JSValue, args: &[JSValue]
     Ok(JSValue::bool(result))
 }
 
+/// Array.prototype.forEach() wrapper
+pub fn array_for_each_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let callback = args.get(0).copied().unwrap_or(JSValue::undefined());
+    array::array_for_each(ctx, this, callback)
+}
+
+/// Array.prototype.map() wrapper
+pub fn array_map_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let callback = args.get(0).copied().unwrap_or(JSValue::undefined());
+    array::array_map(ctx, this, callback)
+}
+
+/// Array.prototype.filter() wrapper
+pub fn array_filter_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let callback = args.get(0).copied().unwrap_or(JSValue::undefined());
+    array::array_filter(ctx, this, callback)
+}
+
+/// Array.prototype.reduce() wrapper
+pub fn array_reduce_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let callback = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let initial = args.get(1).copied();
+    array::array_reduce(ctx, this, callback, initial)
+}
+
+/// Array.prototype.find() wrapper
+pub fn array_find_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let callback = args.get(0).copied().unwrap_or(JSValue::undefined());
+    array::array_find(ctx, this, callback)
+}
+
+/// Array.prototype.findIndex() wrapper
+pub fn array_find_index_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let callback = args.get(0).copied().unwrap_or(JSValue::undefined());
+    array::array_find_index(ctx, this, callback)
+}
+
+/// Array.prototype.some() wrapper
+pub fn array_some_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let callback = args.get(0).copied().unwrap_or(JSValue::undefined());
+    array::array_some(ctx, this, callback)
+}
+
+/// Array.prototype.every() wrapper
+pub fn array_every_native(ctx: &mut Context, this: JSValue, args: &[JSValue]) -> Result<JSValue, JSValue> {
+    let callback = args.get(0).copied().unwrap_or(JSValue::undefined());
+    array::array_every(ctx, this, callback)
+}
+
 // ========== String.prototype Methods ==========
 
 /// String.prototype.charAt() wrapper

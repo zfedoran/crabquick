@@ -243,13 +243,135 @@ impl VM {
             return Err(self.throw_error(ctx, "Call stack overflow"));
         }
 
+        // Set up reentrant call mechanism so native functions can call closures
+        let vm_ptr = core::ptr::NonNull::new(self as *mut VM as *mut u8).unwrap();
+        ctx.set_reentrant_call(vm_ptr, Self::reentrant_call_handler);
+
         // Main execution loop
         let result = self.run_loop(ctx, &mut reader);
+
+        // Clear reentrant call mechanism
+        ctx.clear_reentrant_call();
 
         // Pop the frame
         let _ = self.call_stack.pop();
 
         result
+    }
+
+    /// Handler for reentrant calls from native code
+    ///
+    /// This allows native functions (like Array.prototype.map) to call
+    /// JavaScript callbacks (closures).
+    unsafe fn reentrant_call_handler(
+        vm_ptr: core::ptr::NonNull<u8>,
+        ctx: &mut Context,
+        func: JSValue,
+        args: &[JSValue],
+    ) -> Result<JSValue, JSValue> {
+        let vm = &mut *(vm_ptr.as_ptr() as *mut VM);
+        vm.call_function_internal(ctx, func, args)
+    }
+
+    /// Internal function call used by reentrant handler
+    fn call_function_internal(
+        &mut self,
+        ctx: &mut Context,
+        func: JSValue,
+        args: &[JSValue],
+    ) -> Result<JSValue, JSValue> {
+        // Check if it's a closure
+        if ctx.is_closure(func) {
+            let closure_idx = match func.to_ptr() {
+                Some(idx) => idx,
+                None => return Err(self.throw_error(ctx, "Invalid closure value")),
+            };
+
+            // Get closure info
+            let (bytecode_index, param_count, local_count, self_name_slot) = match ctx.get_closure(closure_idx) {
+                Some(closure) => (closure.bytecode_index, closure.param_count as usize, closure.local_count as usize, closure.self_name_slot),
+                None => return Err(self.throw_error(ctx, "Invalid closure")),
+            };
+
+            // Prepare args - pad if needed
+            let mut padded_args: Vec<JSValue> = args.to_vec();
+            while padded_args.len() < param_count {
+                padded_args.push(JSValue::undefined());
+            }
+
+            // Push arguments onto the stack as locals
+            let base_sp = self.value_stack.len();
+            for arg in &padded_args {
+                self.value_stack.push(*arg)
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+            }
+
+            // Reserve space for additional locals
+            for _ in param_count..local_count {
+                self.value_stack.push(JSValue::undefined())
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+            }
+
+            // For named function expressions, set the function self-reference
+            if self_name_slot != 0xFF {
+                self.value_stack.set(base_sp + self_name_slot as usize, func)
+                    .map_err(|_| self.throw_error(ctx, "Invalid self_name_slot"))?;
+            }
+
+            // Push a call frame
+            let frame = StackFrame::new_closure(func, base_sp, padded_args.len() as u16, JSValue::undefined(), closure_idx);
+            self.call_stack.push(frame)
+                .map_err(|_| self.throw_error(ctx, "Call stack overflow"))?;
+
+            // Execute the function with closure context
+            let result = self.execute_bytecode_function(ctx, bytecode_index, base_sp, local_count, Some(closure_idx));
+
+            // Pop the call frame
+            let _ = self.call_stack.pop();
+
+            // Clean up local variables from stack
+            self.value_stack.truncate(base_sp);
+
+            // Clean up promoted var_refs for this frame
+            self.promoted_var_refs.retain(|(sp, _, _)| *sp != base_sp);
+
+            result
+        } else if let Some(bc_func) = ctx.get_bytecode_function(func) {
+            // Bytecode function (not a closure)
+            let func_bc_index = bc_func.bytecode_index();
+            let param_count = bc_func.param_count() as usize;
+            let local_count = bc_func.local_count() as usize;
+
+            // Prepare args
+            let mut padded_args: Vec<JSValue> = args.to_vec();
+            while padded_args.len() < param_count {
+                padded_args.push(JSValue::undefined());
+            }
+
+            let base_sp = self.value_stack.len();
+            for arg in &padded_args {
+                self.value_stack.push(*arg)
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+            }
+
+            for _ in param_count..local_count {
+                self.value_stack.push(JSValue::undefined())
+                    .map_err(|_| self.throw_error(ctx, "Stack overflow"))?;
+            }
+
+            let frame = StackFrame::new(func, base_sp, padded_args.len() as u16, JSValue::undefined());
+            self.call_stack.push(frame)
+                .map_err(|_| self.throw_error(ctx, "Call stack overflow"))?;
+
+            let result = self.execute_bytecode_function(ctx, func_bc_index, base_sp, local_count, None);
+
+            let _ = self.call_stack.pop();
+            self.value_stack.truncate(base_sp);
+
+            result
+        } else {
+            Err(self.throw_error(ctx, "Not a callable function"))
+        }
     }
 
     /// Main execution loop

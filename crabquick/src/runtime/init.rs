@@ -170,6 +170,39 @@ fn install_array_constructor(ctx: &mut Context, global: JSValue) -> Result<(), J
         .map_err(|_| make_error(ctx, "Out of memory"))?;
     set_property(ctx, array_proto, "reverse", reverse_fn)?;
 
+    // Callback methods
+    let for_each_fn = ctx.new_native_function(native_functions::array_for_each_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "forEach", for_each_fn)?;
+
+    let map_fn = ctx.new_native_function(native_functions::array_map_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "map", map_fn)?;
+
+    let filter_fn = ctx.new_native_function(native_functions::array_filter_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "filter", filter_fn)?;
+
+    let reduce_fn = ctx.new_native_function(native_functions::array_reduce_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "reduce", reduce_fn)?;
+
+    let find_fn = ctx.new_native_function(native_functions::array_find_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "find", find_fn)?;
+
+    let find_index_fn = ctx.new_native_function(native_functions::array_find_index_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "findIndex", find_index_fn)?;
+
+    let some_fn = ctx.new_native_function(native_functions::array_some_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "some", some_fn)?;
+
+    let every_fn = ctx.new_native_function(native_functions::array_every_native, 1)
+        .map_err(|_| make_error(ctx, "Out of memory"))?;
+    set_property(ctx, array_proto, "every", every_fn)?;
+
     // Create Array constructor (placeholder)
     let array_ctor = ctx.new_object()
         .map_err(|_| make_error(ctx, "Out of memory"))?;

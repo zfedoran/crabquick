@@ -20,6 +20,14 @@ use crate::value::{JSValue, AtomTable};
 /// let mut ctx = Context::new(8192);
 /// let result = ctx.eval("1 + 1", "script.js", 0)?;
 /// ```
+/// Callback type for re-entering VM to call closures from native code
+pub type ReentrantCallFn = unsafe fn(
+    vm_ptr: core::ptr::NonNull<u8>,
+    ctx: &mut Context,
+    func: JSValue,
+    args: &[JSValue],
+) -> Result<JSValue, JSValue>;
+
 pub struct Context {
     /// Memory arena for heap allocations
     arena: Arena,
@@ -31,6 +39,10 @@ pub struct Context {
     global_object: JSValue,
     /// Current exception value (if any)
     exception_value: JSValue,
+    /// Raw pointer to VM for reentrant calls (set by VM during execution)
+    vm_ptr: Option<core::ptr::NonNull<u8>>,
+    /// Callback for calling functions from native code (set by VM during execution)
+    reentrant_call: Option<ReentrantCallFn>,
     // TODO: Add more fields:
     // - class_array: Vec<JSClass>
     // - interrupt_handler: Option<InterruptHandler>
@@ -55,6 +67,8 @@ impl Context {
             atom_table: AtomTable::new(),
             global_object: JSValue::null(),
             exception_value: JSValue::undefined(),
+            vm_ptr: None,
+            reentrant_call: None,
         };
 
         // Initialize global object (store as null if it fails)
@@ -62,6 +76,18 @@ impl Context {
         ctx.global_object = ctx.new_object().unwrap_or(JSValue::null());
 
         ctx
+    }
+
+    /// Set the reentrant call mechanism (called by VM during execution)
+    pub fn set_reentrant_call(&mut self, vm_ptr: core::ptr::NonNull<u8>, call_fn: ReentrantCallFn) {
+        self.vm_ptr = Some(vm_ptr);
+        self.reentrant_call = Some(call_fn);
+    }
+
+    /// Clear the reentrant call mechanism (called by VM when execution ends)
+    pub fn clear_reentrant_call(&mut self) {
+        self.vm_ptr = None;
+        self.reentrant_call = None;
     }
 
     /// Evaluates JavaScript source code
@@ -735,12 +761,19 @@ impl Context {
             }
         }
 
-        // TODO: Implement bytecode function calling
-        // This requires:
-        // 1. Extracting the function bytecode from func
-        // 2. Setting up a call frame with args
-        // 3. Executing the bytecode
-        Ok(JSValue::undefined())
+        // Check if it's a closure or bytecode function that requires VM execution
+        if self.is_closure(func) || self.get_bytecode_function(func).is_some() {
+            // Use reentrant call mechanism if available
+            if let (Some(vm_ptr), Some(call_fn)) = (self.vm_ptr, self.reentrant_call) {
+                return unsafe { call_fn(vm_ptr, self, func, args) };
+            }
+            // No VM available - can't call closures outside of execution
+            return Err(self.new_string("Cannot call closure outside of VM execution")
+                .unwrap_or(JSValue::undefined()));
+        }
+
+        // Unknown function type
+        Err(self.new_string("Not a callable function").unwrap_or(JSValue::undefined()))
     }
 
     /// Creates a new native function

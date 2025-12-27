@@ -420,36 +420,262 @@ pub fn array_reverse(ctx: &mut Context, arr: JSValue) -> Result<JSValue, JSValue
 
 /// Array.prototype.forEach() - Executes a function for each element
 ///
-/// Simplified: Just returns the array (proper implementation needs VM integration)
-pub fn array_for_each(_ctx: &mut Context, arr: JSValue, _callback: JSValue) -> Result<JSValue, JSValue> {
-    // TODO: Implement callback execution via VM
-    Ok(arr)
+/// Calls callback(element, index, array) for each element
+pub fn array_for_each(ctx: &mut Context, arr: JSValue, callback: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let len = get_array_length(ctx, arr);
+
+    for i in 0..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            // Call callback(element, index, array)
+            let index_val = JSValue::from_int(i);
+            let args = [elem, index_val, arr];
+            ctx.call_function(callback, JSValue::undefined(), &args)?;
+        }
+    }
+
+    Ok(JSValue::undefined())
+}
+
+/// Helper to create a new array-like object with Array.prototype
+fn new_array_object(ctx: &mut Context) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let result = ctx.new_object().map_err(|_| JSValue::exception())?;
+
+    // Get Array.prototype and set it on the new object
+    let array_atom = string_to_atom("Array");
+    let proto_atom = string_to_atom("prototype");
+    if let Some(array_ctor) = ctx.get_global_property(array_atom) {
+        if let Some(array_proto) = ctx.get_property(array_ctor, proto_atom) {
+            if let Some(obj) = ctx.get_object_mut(result) {
+                obj.set_prototype(array_proto);
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 /// Array.prototype.map() - Creates a new array with results of calling a function
 ///
-/// Simplified: Returns a copy (proper implementation needs VM integration)
-pub fn array_map(ctx: &mut Context, arr: JSValue, _callback: JSValue) -> Result<JSValue, JSValue> {
-    // TODO: Implement callback execution via VM
-    // For now, just return a copy
-    array_slice(ctx, arr, None, None)
+/// Calls callback(element, index, array) for each element and returns array of results
+pub fn array_map(ctx: &mut Context, arr: JSValue, callback: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+    use crate::object::PropertyFlags;
+
+    let len = get_array_length(ctx, arr);
+
+    // Create result array with Array.prototype
+    let result = new_array_object(ctx)?;
+
+    for i in 0..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            // Call callback(element, index, array)
+            let index_val = JSValue::from_int(i);
+            let args = [elem, index_val, arr];
+            let mapped_val = ctx.call_function(callback, JSValue::undefined(), &args)?;
+
+            // Store result
+            ctx.add_property(result, idx_atom, mapped_val, PropertyFlags::default())
+                .map_err(|_| JSValue::exception())?;
+        }
+    }
+
+    // Set length on result
+    set_array_length(ctx, result, len)?;
+
+    Ok(result)
 }
 
 /// Array.prototype.filter() - Creates a new array with filtered elements
 ///
-/// Simplified: Returns a copy (proper implementation needs VM integration)
-pub fn array_filter(ctx: &mut Context, arr: JSValue, _callback: JSValue) -> Result<JSValue, JSValue> {
-    // TODO: Implement callback execution via VM
-    // For now, just return a copy
-    array_slice(ctx, arr, None, None)
+/// Calls callback(element, index, array) for each element and returns elements where callback returned truthy
+pub fn array_filter(ctx: &mut Context, arr: JSValue, callback: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+    use crate::object::PropertyFlags;
+
+    let len = get_array_length(ctx, arr);
+
+    // Create result array with Array.prototype
+    let result = new_array_object(ctx)?;
+    let mut result_len = 0i32;
+
+    for i in 0..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            // Call callback(element, index, array)
+            let index_val = JSValue::from_int(i);
+            let args = [elem, index_val, arr];
+            let keep = ctx.call_function(callback, JSValue::undefined(), &args)?;
+
+            // Check if callback returned truthy value
+            if keep.to_bool().unwrap_or(false) {
+                // Add element to result
+                let result_idx_str = alloc::format!("{}", result_len);
+                let result_idx_atom = string_to_atom(&result_idx_str);
+                ctx.add_property(result, result_idx_atom, elem, PropertyFlags::default())
+                    .map_err(|_| JSValue::exception())?;
+                result_len += 1;
+            }
+        }
+    }
+
+    // Set length on result
+    set_array_length(ctx, result, result_len)?;
+
+    Ok(result)
 }
 
 /// Array.prototype.reduce() - Reduces array to a single value
 ///
-/// Simplified: Returns undefined (proper implementation needs VM integration)
-pub fn array_reduce(_ctx: &mut Context, _arr: JSValue, _callback: JSValue, _initial: Option<JSValue>) -> Result<JSValue, JSValue> {
-    // TODO: Implement callback execution via VM
+/// Calls callback(accumulator, element, index, array) for each element
+pub fn array_reduce(ctx: &mut Context, arr: JSValue, callback: JSValue, initial: Option<JSValue>) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let len = get_array_length(ctx, arr);
+
+    if len == 0 && initial.is_none() {
+        // TypeError: Reduce of empty array with no initial value
+        return Err(ctx.new_string("Reduce of empty array with no initial value")
+            .unwrap_or(JSValue::exception()));
+    }
+
+    let mut accumulator: JSValue;
+    let start_idx: i32;
+
+    if let Some(init_val) = initial {
+        accumulator = init_val;
+        start_idx = 0;
+    } else {
+        // Use first element as initial value
+        let zero_atom = string_to_atom("0");
+        accumulator = ctx.get_property(arr, zero_atom).unwrap_or(JSValue::undefined());
+        start_idx = 1;
+    }
+
+    for i in start_idx..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            // Call callback(accumulator, element, index, array)
+            let index_val = JSValue::from_int(i);
+            let args = [accumulator, elem, index_val, arr];
+            accumulator = ctx.call_function(callback, JSValue::undefined(), &args)?;
+        }
+    }
+
+    Ok(accumulator)
+}
+
+/// Array.prototype.find() - Returns the first element that satisfies the predicate
+pub fn array_find(ctx: &mut Context, arr: JSValue, callback: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let len = get_array_length(ctx, arr);
+
+    for i in 0..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            // Call callback(element, index, array)
+            let index_val = JSValue::from_int(i);
+            let args = [elem, index_val, arr];
+            let result = ctx.call_function(callback, JSValue::undefined(), &args)?;
+
+            if result.to_bool().unwrap_or(false) {
+                return Ok(elem);
+            }
+        }
+    }
+
     Ok(JSValue::undefined())
+}
+
+/// Array.prototype.findIndex() - Returns the index of the first element that satisfies the predicate
+pub fn array_find_index(ctx: &mut Context, arr: JSValue, callback: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let len = get_array_length(ctx, arr);
+
+    for i in 0..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            // Call callback(element, index, array)
+            let index_val = JSValue::from_int(i);
+            let args = [elem, index_val, arr];
+            let result = ctx.call_function(callback, JSValue::undefined(), &args)?;
+
+            if result.to_bool().unwrap_or(false) {
+                return Ok(JSValue::from_int(i));
+            }
+        }
+    }
+
+    Ok(JSValue::from_int(-1))
+}
+
+/// Array.prototype.some() - Tests whether at least one element passes the predicate
+pub fn array_some(ctx: &mut Context, arr: JSValue, callback: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let len = get_array_length(ctx, arr);
+
+    for i in 0..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            // Call callback(element, index, array)
+            let index_val = JSValue::from_int(i);
+            let args = [elem, index_val, arr];
+            let result = ctx.call_function(callback, JSValue::undefined(), &args)?;
+
+            if result.to_bool().unwrap_or(false) {
+                return Ok(JSValue::bool(true));
+            }
+        }
+    }
+
+    Ok(JSValue::bool(false))
+}
+
+/// Array.prototype.every() - Tests whether all elements pass the predicate
+pub fn array_every(ctx: &mut Context, arr: JSValue, callback: JSValue) -> Result<JSValue, JSValue> {
+    use crate::runtime::init::string_to_atom;
+
+    let len = get_array_length(ctx, arr);
+
+    for i in 0..len {
+        let idx_str = alloc::format!("{}", i);
+        let idx_atom = string_to_atom(&idx_str);
+
+        if let Some(elem) = ctx.get_property(arr, idx_atom) {
+            // Call callback(element, index, array)
+            let index_val = JSValue::from_int(i);
+            let args = [elem, index_val, arr];
+            let result = ctx.call_function(callback, JSValue::undefined(), &args)?;
+
+            if !result.to_bool().unwrap_or(false) {
+                return Ok(JSValue::bool(false));
+            }
+        }
+    }
+
+    Ok(JSValue::bool(true))
 }
 
 #[cfg(test)]
